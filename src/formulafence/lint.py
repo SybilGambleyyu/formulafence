@@ -1930,6 +1930,7 @@ def lint_snapshot(
     never evaluates formulas, and rejects incomplete array metadata before
     claiming ordinary-cell coverage.
     """
+    snapshot.require_full_inspection("Formula lint")
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
     if max_aggregate_omission_gap_cells < _MIN_AGGREGATE_OMISSION_GAP_CELLS:

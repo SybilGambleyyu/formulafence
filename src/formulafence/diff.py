@@ -183,6 +183,8 @@ def analyze_downstream_impact(
     Range references are checked lazily instead of expanded, so a formula such as
     `SUM(A:A)` does not turn into a million in-memory graph edges.
     """
+    for snapshot in snapshots:
+        snapshot.require_full_inspection("Downstream impact analysis")
     if state_budget is not None:
         state_budget.consume()
     queue: deque[CellKey] = deque([location])
@@ -3727,6 +3729,8 @@ def compare_snapshots(
     _state_budget: ChangeAnalysisBudget | None = None,
 ) -> DiffReport:
     """Compare workbook semantics and attach bounded local impact to each edit."""
+    before.require_full_inspection("Workbook comparison")
+    after.require_full_inspection("Workbook comparison")
     if max_change_analysis_states < 1:
         raise FormulaFenceError("max_change_analysis_states must be at least 1.")
     state_budget = _state_budget or ChangeAnalysisBudget(

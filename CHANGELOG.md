@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.219.0 — 2026-08-01
+
+- Add an explicit profile-only `.xlsb` path. Its bounded BIFF12 core reader
+  validates binary record framing, workbook/worksheet catalogs, internal
+  workbook relationships, shared strings, ordinary cells, defined names, and a
+  verified subset of RPN formula tokens without evaluating a formula or macro.
+- Make the capability boundary visible and fail closed: `.xlsb` works only with
+  `formulafence profile`; `lint`, `diff`, `check`, and `portfolio` reject it,
+  and the public lint, comparison, and dependency APIs reject a narrowed
+  snapshot too. Reports declare `xlsb_core_profile` scope, formula-text token
+  coverage, and that out-of-scope counts are unassessed.
+- Keep XLSB profile output data-minimising. It does not publish cell values,
+  formula text, defined-name identities or bodies, saved results, or non-core
+  package surfaces. It applies the normal ZIP preflight plus explicit binary,
+  relationship XML, cell, formula, and aggregate-memory ceilings; unsupported
+  formula tokens become visible coverage gaps rather than guessed formula text.
+
 ## 0.218.0 — 2026-08-01
 
 - Add high-severity `FF116` to `formulafence lint`: it reports a saved

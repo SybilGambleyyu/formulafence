@@ -4557,6 +4557,19 @@ class WorkbookSnapshot:
         default_factory=dict
     )
     tokenization_failure_cells: set[CellKey] = field(default_factory=set)
+    # Most readers populate the full FormulaFence semantic surface. A staged
+    # reader can expose an intentionally narrower workflow only when callers
+    # make that boundary explicit in its public profile artifact.
+    inspection_scope: str = "full"
+    formula_text_coverage_complete: bool | None = None
+
+    def require_full_inspection(self, operation: str) -> None:
+        """Reject full-semantic work against an explicitly narrowed snapshot."""
+        if self.inspection_scope != "full":
+            raise FormulaFenceError(
+                f"{operation} requires a full workbook inspection; "
+                f"snapshot scope is {self.inspection_scope!r}."
+            )
 
     def direct_dependents(self, location: CellKey) -> set[CellKey]:
         dependents = set(self.reverse_dependencies.get(location, set()))

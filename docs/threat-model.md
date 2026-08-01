@@ -663,10 +663,18 @@ formula will produce.
 
 ## Deliberate limits
 
-- Supported files are `.xlsx` and `.xlsm`; legacy `.xls` and file-encrypted or
-  password-to-open workbooks are outside scope. Workbook and worksheet
-  protection flags inside an otherwise readable OOXML workbook are inspected as
-  operational controls, not treated as encryption.
+- Full semantic inspection supports `.xlsx` and `.xlsm`. The explicit
+  `profile` command also accepts `.xlsb` through a bounded binary core reader;
+  its public artifact declares `xlsb_core_profile` scope and whether every
+  encountered formula/defined-name token stream was reconstructed by the
+  verified subset. It does not make absence claims about workbook controls,
+  formatting, array or dynamic-array metadata, calculation settings, external
+  relationships, saved-result evidence, rich data, or other non-core surfaces.
+  `lint`, `diff`, `check`, and `portfolio` reject `.xlsb`, so this narrow reader
+  cannot silently become a CI decision or semantic comparison. Legacy `.xls`
+  and file-encrypted or password-to-open workbooks are outside scope. Workbook
+  and worksheet protection flags inside an otherwise readable OOXML workbook
+  are inspected as operational controls, not treated as encryption.
 - Source package safety limits are fixed at 1 GiB compressed source bytes,
   32 MiB central-directory metadata, 4,096 members, 1,024 UTF-8 bytes per
   member name, 512 MiB expanded bytes per member, 768 MiB expanded bytes in
@@ -678,6 +686,22 @@ formula will produce.
   content. These are resource and
   interpretation limits for untrusted CI input, not a claim to detect every
   hostile document or to make an untrusted runner safe.
+- The profile-only XLSB reader applies the same outer ZIP preflight, then reads
+  only `workbook.bin`, its relationship part, optional shared strings, and
+  worksheet binary parts. It caps each selected core binary part at 64 MiB,
+  except the workbook relationship XML part at 1 MiB, and aggregate selected
+  binary data at 256 MiB. Its relationship parser accepts only the package
+  relationship root and direct `Relationship` children with the documented
+  attributes, bounded identifiers/types/targets, and `Internal` or `External`
+  target modes. Independent limits cover BIFF12 record payloads and count,
+  sheets, relationships, defined names, shared strings, per-sheet and
+  500,000-total retained worksheet cells, cell text, formula
+  bytes/tokens/stack/text plus 64 MiB aggregate decoded formula text, and
+  function arguments. It rejects malformed binary records and formula streams;
+  recognized but unsupported token constructs are retained as explicit
+  formula-text coverage gaps. The reader never evaluates formulas, follows
+  external relationships, or exposes cell values, formula text, defined-name
+  labels, or definition bodies in a profile.
 - Policy source is independently capped at 1 MiB, 4,096 composed YAML nodes,
   64 nesting levels, 4,096 characters per scalar, and 512 selectors in each
   selector list. It is one UTF-8 YAML document read from one verified regular

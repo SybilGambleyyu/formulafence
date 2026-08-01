@@ -1,15 +1,16 @@
 # FormulaFence
 
 FormulaFence is a local-first spreadsheet change-assurance CLI. It makes `.xlsx`
-changes reviewable in CI: compare workbook semantics, trace downstream formula
-impact, detect high-risk edits, and enforce a small policy file before a model
-is shared or merged.
+and `.xlsm` changes reviewable in CI: compare workbook semantics, trace downstream
+formula impact, detect high-risk edits, and enforce a small policy file before a
+model is shared or merged.
 
 It never executes formulas or macros, and it does not upload workbook contents.
 
-> Status: early alpha. The first release supports `.xlsx` and `.xlsm` inspection
-> with formula-aware diffs, dependency impact, policy checks, Markdown/HTML/JSON/
-> SARIF reports, and deterministic evidence metadata.
+> Status: early alpha. Full inspection supports `.xlsx` and `.xlsm` with
+> formula-aware diffs, dependency impact, policy checks, Markdown/HTML/JSON/SARIF
+> reports, and deterministic evidence metadata. `.xlsb` is accepted only by the
+> intentionally bounded `profile` workflow described below.
 
 ## Why
 
@@ -40,7 +41,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.218.0/formulafence-0.218.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.219.0/formulafence-0.219.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -54,6 +55,10 @@ formulafence check baseline.xlsx candidate.xlsx --policy formulafence.yml --form
 # Lint one workbook for conservative formula and calculation risks.
 formulafence lint candidate.xlsx --fail-on high --format sarif --output formula-lint.sarif
 
+# Inventory the bounded core of an Excel Binary Workbook. This is profile-only:
+# lint, diff, check, and portfolio intentionally reject .xlsb files.
+formulafence profile large-model.xlsb --format markdown --output xlsb-profile.md
+
 # Compare a recursively matched portfolio of workbooks.
 formulafence portfolio approved-models build/models --policy formulafence.yml --output portfolio-report.md
 ```
@@ -61,6 +66,26 @@ formulafence portfolio approved-models build/models --policy formulafence.yml --
 FormulaFence is not yet published to PyPI; the direct release URL above avoids
 an ambiguous package-name install. See [GitHub Releases](https://github.com/SybilGambleyyu/formulafence/releases)
 for the current version.
+
+### XLSB core profiles
+
+`formulafence profile WORKBOOK.xlsb` reads a deliberately narrow, bounded XLSB
+core: the workbook tab catalog, its internal worksheet relationships, ordinary
+worksheet grid cells, optional shared strings, and only formula-token forms
+that FormulaFence can reconstruct without guessing. It emits a data-minimising
+JSON or Markdown inventory—never cell values or formula text. The report starts
+with `xlsb_core_profile` inspection scope and states whether all encountered
+formula/defined-name token streams were covered by the verified decoder.
+Defined-name labels and definition bodies are withheld too; the inventory keeps
+only their aggregate count and formula-text coverage status.
+
+This is not full XLSB inspection. XLSB profiles do not inspect or make absence
+claims about workbook controls, formatting, array or dynamic-array metadata,
+calculation settings, external relationships, saved-result evidence, rich data,
+or other non-core package surfaces. Markdown explicitly marks counts outside
+that scope as *unassessed*. `lint`, `diff`, `check`, and `portfolio` continue to
+accept only `.xlsx` and `.xlsm`, so a narrow snapshot cannot silently become a
+CI decision or a semantic comparison.
 
 ### Formula lint
 
@@ -504,7 +529,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.218.0
+  uses: SybilGambleyyu/formulafence@v0.219.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -3188,9 +3213,10 @@ that changes in place or is replaced after inventory is reported as unreadable,
 so a report cannot silently switch to a newly named workbook between membership
 review and semantic inspection.
 
-Every `.xlsx` and `.xlsm` source passes a fail-closed OOXML archive preflight
-before FormulaFence reads an OOXML part or opens the workbook reader. The
-preflight does not extract the archive. It accepts only one canonical,
+Every full-inspection `.xlsx`/`.xlsm` source and every profile-only `.xlsb`
+source passes a fail-closed OOXML archive preflight before FormulaFence reads a
+package part or opens a workbook reader. The preflight does not extract the
+archive. It accepts only one canonical,
 single-disk ZIP container with stored or deflated members, then rejects
 duplicate or case-colliding paths, ZIP Unicode-path aliases, unsafe paths,
 encrypted or special-file members, inconsistent local headers, and overlapping
@@ -3201,8 +3227,9 @@ and a 1,000:1 maximum member compression ratio. These are input-safety limits,
 not a malware classification or a substitute for isolated CI runners. See the
 [threat model](docs/threat-model.md) for the complete boundary.
 
-After that header-only ZIP check, a semantic-reader preflight caps every
-XML/relationship part at 64 MiB, aggregate XML material at 256 MiB, and streams
+For full `.xlsx`/`.xlsm` inspection, that header-only ZIP check is followed by a
+semantic-reader preflight that caps every XML/relationship part at 64 MiB,
+aggregate XML material at 256 MiB, and streams
 the reader-visible manifest, workbook, styles, shared strings, and bounded
 workbook-selected sheets before FormulaFence starts a complete in-memory reader
 or downstream raw OOXML scanning. Before XML parser construction, it bounds
@@ -3256,6 +3283,19 @@ The raw rich-text scanner streams one direct shared-string item at a time and
 releases unrelated root children as it goes, so a compact extension tree cannot
 first force either scanner to retain the full table. These are CI allocation
 limits, not SpreadsheetML validity rules.
+
+For the explicit `.xlsb` profile workflow, FormulaFence instead reads only the
+bounded core binary parts after that same ZIP check: `workbook.bin`, its
+relationship part, an optional shared-string table, and worksheet binary parts.
+Each selected binary part is capped at 64 MiB, except the workbook relationship
+XML which is capped at 1 MiB, and the selected core at 256 MiB; BIFF12 record
+framing, strings, formula token streams, relationships, sheet catalogs, a
+500,000-cell total retained grid, and decoded formula text have separate
+limits. Unknown or
+ambiguous formula constructs remain visible formula-text coverage gaps rather
+than invented text. This core reader is a profile capability boundary, not a
+claim to inspect every XLSB surface.
+
 The reader ceilings count input structure, but a static formula-derived graph can
 still fan out after that reader phase: one compact formula-defined name may
 resolve to many local references at each caller. FormulaFence therefore also

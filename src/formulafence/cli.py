@@ -633,6 +633,7 @@ def _run_profile(arguments: argparse.Namespace) -> int:
     profile = profile_snapshot(
         load_snapshot(
             arguments.workbook,
+            inspection_scope="profile",
             max_dependency_edges=arguments.max_dependency_edges,
             max_formula_defined_name_states=(
                 arguments.max_formula_defined_name_states

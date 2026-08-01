@@ -153,8 +153,17 @@ from formulafence.models import (
     display_location,
     json_safe_value,
 )
+from formulafence.xlsb import (
+    DEFAULT_XLSB_READER_LIMITS,
+    XlsbCoreCell,
+    XlsbCoreWorkbook,
+    XlsbReaderLimits,
+    parse_xlsb_workbook_parts,
+)
 
 _SUPPORTED_SUFFIXES = {".xlsx", ".xlsm"}
+_PROFILE_ONLY_SUPPORTED_SUFFIXES = _SUPPORTED_SUFFIXES | {".xlsb"}
+_XLSB_PROFILE_INSPECTION_SCOPE = "xlsb_core_profile"
 # Profiles intentionally retain safe per-location inventory evidence.  The
 # ordinary reader already bounds the source workbook, but a sparse workbook can
 # still put many of those records into a new public profile object.  Keep the
@@ -51791,9 +51800,206 @@ def _materialize_stable_workbook_source(
             _remove_stable_workbook_source(temporary_path)
 
 
+def _read_xlsb_core_parts(
+    source: Path,
+    archive_members: tuple[_OoxmlArchiveMember, ...],
+    *,
+    limits: XlsbReaderLimits = DEFAULT_XLSB_READER_LIMITS,
+) -> dict[str, bytes]:
+    """Read only bounded XLSB core parts after the common ZIP preflight."""
+    limits.validate()
+    members_by_name = {member.name.casefold(): member for member in archive_members}
+    required_names = {"xl/workbook.bin", "xl/_rels/workbook.bin.rels"}
+    optional_names = {"xl/sharedstrings.bin"}
+    selected_members = sorted(
+        (
+            member
+            for member in members_by_name.values()
+            if (
+                member.name.casefold() in required_names | optional_names
+                or (
+                    member.name.casefold().startswith("xl/worksheets/")
+                    and member.name.casefold().endswith(".bin")
+                )
+            )
+        ),
+        key=lambda member: member.name.casefold(),
+    )
+    selected_names = {member.name.casefold() for member in selected_members}
+    if not required_names.issubset(selected_names):
+        raise WorkbookLoadError("XLSB package is missing required workbook parts.")
+
+    total_bytes = 0
+    for member in selected_members:
+        is_relationship_part = (
+            member.name.casefold() == "xl/_rels/workbook.bin.rels"
+        )
+        member_limit = (
+            limits.max_relationship_part_bytes
+            if is_relationship_part
+            else limits.max_binary_part_bytes
+        )
+        if member.uncompressed_size > member_limit:
+            if is_relationship_part:
+                raise WorkbookLoadError(
+                    "XLSB workbook relationship part exceeds its safety limit."
+                )
+            raise WorkbookLoadError("XLSB core part exceeds its safety limit.")
+        total_bytes += member.uncompressed_size
+        if total_bytes > limits.max_total_binary_bytes:
+            raise WorkbookLoadError("XLSB core parts exceed their safety limit.")
+
+    try:
+        with ZipFile(source) as archive:
+            return {
+                member.name: archive.read(member.name)
+                for member in selected_members
+            }
+    except (BadZipFile, KeyError, OSError, RuntimeError, ValueError) as error:
+        raise WorkbookLoadError("Could not read bounded XLSB core package parts.") from error
+
+
+def _xlsb_coordinate(row: int, column: int) -> str:
+    """Convert one validated zero-based BIFF12 cell position to A1 notation."""
+    return f"{get_column_letter(column + 1)}{row + 1}"
+
+
+def _xlsb_profile_snapshot_from_core(
+    core: XlsbCoreWorkbook,
+    source: Path,
+    reported_source: Path,
+) -> WorkbookSnapshot:
+    """Adapt verified XLSB core state to the profile-only snapshot boundary."""
+    cells: dict[CellKey, CellSnapshot] = {}
+    sheets: dict[str, SheetSnapshot] = {}
+    unsupported_formula_cells: set[CellKey] = set()
+    broken_references: set[CellKey] = set()
+
+    cells_by_sheet: dict[str, list[XlsbCoreCell]] = defaultdict(list)
+    for core_cell in core.cells.values():
+        cells_by_sheet[core_cell.sheet].append(core_cell)
+
+    for core_sheet in core.sheets:
+        sheet_cells = cells_by_sheet.get(core_sheet.title, [])
+        nonempty_cells = 0
+        formula_cells = 0
+        max_row = 0
+        max_column = 0
+        for core_cell in sorted(
+            sheet_cells, key=lambda cell: (cell.row, cell.column)
+        ):
+            coordinate = _xlsb_coordinate(core_cell.row, core_cell.column)
+            location = (core_sheet.title, coordinate)
+            nonempty_cells += 1
+            max_row = max(max_row, core_cell.row + 1)
+            max_column = max(max_column, core_cell.column + 1)
+            if core_cell.cell_type == "formula":
+                formula_cells += 1
+                formula = core_cell.formula
+                if formula is None:
+                    unsupported_formula_cells.add(location)
+                    cells[location] = CellSnapshot(
+                        sheet=core_sheet.title,
+                        coordinate=coordinate,
+                        cell_type="formula",
+                        value=None,
+                        value_type="unsupported_xlsb_formula",
+                    )
+                    continue
+                if has_broken_reference(formula):
+                    broken_references.add(location)
+                cells[location] = CellSnapshot(
+                    sheet=core_sheet.title,
+                    coordinate=coordinate,
+                    cell_type="formula",
+                    value=None,
+                    value_type="formula",
+                )
+                continue
+            cells[location] = CellSnapshot(
+                sheet=core_sheet.title,
+                coordinate=coordinate,
+                cell_type=core_cell.cell_type,
+                value=None,
+                value_type=core_cell.value_type,
+            )
+        sheets[core_sheet.title] = SheetSnapshot(
+            title=core_sheet.title,
+            state=core_sheet.state,
+            nonempty_cells=nonempty_cells,
+            formula_cells=formula_cells,
+            max_row=max_row,
+            max_column=max_column,
+        )
+
+    # The core has already used name labels to reconstruct indexed formula
+    # tokens. The public profile needs only the aggregate name count, so retain
+    # an opaque, collision-free placeholder for each definition rather than a
+    # source name or formula body in its long-lived snapshot.
+    defined_names = {
+        f"__xlsb_profile_defined_name_{index}": ""
+        for index, _ in enumerate(core.defined_names, start=1)
+    }
+
+    parser_warnings = {
+        (
+            "FormulaFence read this XLSB through its bounded core reader; only the "
+            "profile workflow is supported. Formula lint, diff, check, and portfolio "
+            "workflows are intentionally unavailable."
+        ),
+        (
+            "XLSB core profile coverage excludes workbook controls, formatting, array "
+            "and dynamic-array metadata, calculation settings, external relationships, "
+            "saved-result evidence, rich data, and other non-core package surfaces."
+        ),
+    }
+    if not core.formula_text_coverage_complete:
+        parser_warnings.add(
+            "FormulaFence could not reconstruct every XLSB formula or defined-name "
+            "token stream; formula-text inventory coverage is incomplete."
+        )
+    if core.unsupported_sheet_types:
+        parser_warnings.add(
+            "FormulaFence found XLSB non-grid sheets outside the core profile reader; "
+            "formula-text inventory coverage is incomplete."
+        )
+
+    return WorkbookSnapshot(
+        path=reported_source,
+        sha256=sha256_file(source),
+        file_type="xlsb",
+        sheets=sheets,
+        cells=cells,
+        reverse_dependencies={},
+        range_dependencies=[],
+        external_references=set(),
+        broken_references=broken_references,
+        defined_names=defined_names,
+        macro_hash=_vba_hash(source),
+        calculation_settings={},
+        parser_warnings=tuple(sorted(parser_warnings)),
+        array_formula_metadata_complete=False,
+        tokenization_failure_cells=unsupported_formula_cells,
+        inspection_scope=_XLSB_PROFILE_INSPECTION_SCOPE,
+        formula_text_coverage_complete=core.formula_text_coverage_complete,
+    )
+
+
+def _load_xlsb_profile_snapshot_from_stable_source(
+    source: Path,
+    reported_source: Path,
+) -> WorkbookSnapshot:
+    """Load a bounded XLSB profile snapshot without invoking openpyxl."""
+    archive_members = _validate_ooxml_archive(source)
+    parts = _read_xlsb_core_parts(source, archive_members)
+    core = parse_xlsb_workbook_parts(parts)
+    return _xlsb_profile_snapshot_from_core(core, source, reported_source)
+
+
 def load_snapshot(
     path: str | Path,
     *,
+    inspection_scope: str = "full",
     expected_source_identity: WorkbookSourceIdentity | None = None,
     max_dependency_edges: int = DEFAULT_MAX_DEPENDENCY_EDGES,
     max_formula_defined_name_states: int = DEFAULT_MAX_FORMULA_DEFINED_NAME_STATES,
@@ -51805,7 +52011,9 @@ def load_snapshot(
     A caller that has already inventoried a portfolio can provide the regular
     file identity it observed. The final descriptor must still identify that
     same file state, preventing a later pathname replacement or in-place
-    mutation from widening the portfolio's inspected scope.
+    mutation from widening the portfolio's inspected scope. ``inspection_scope``
+    is normally ``"full"``; the narrower ``"profile"`` scope is reserved for
+    explicitly capability-limited readers such as the XLSB core profile path.
     """
     if max_dependency_edges < 1:
         raise WorkbookLoadError("max_dependency_edges must be at least 1.")
@@ -51813,6 +52021,8 @@ def load_snapshot(
         raise WorkbookLoadError(
             "max_formula_defined_name_states must be at least 1."
         )
+    if inspection_scope not in {"full", "profile"}:
+        raise WorkbookLoadError("inspection_scope must be either 'full' or 'profile'.")
     dependency_edge_budget = _dependency_edge_budget or DependencyEdgeBudget(
         max_edges=max_dependency_edges
     )
@@ -51826,8 +52036,18 @@ def load_snapshot(
         raise WorkbookLoadError(
             f"Workbook does not exist or is not a file: {reported_source}"
         )
-    if reported_source.suffix.lower() not in _SUPPORTED_SUFFIXES:
-        supported = ", ".join(sorted(_SUPPORTED_SUFFIXES))
+    suffix = reported_source.suffix.lower()
+    supported_suffixes = (
+        _PROFILE_ONLY_SUPPORTED_SUFFIXES
+        if inspection_scope == "profile"
+        else _SUPPORTED_SUFFIXES
+    )
+    if suffix not in supported_suffixes:
+        if suffix == ".xlsb":
+            raise WorkbookLoadError(
+                "XLSB is currently supported only by the profile workflow."
+            )
+        supported = ", ".join(sorted(supported_suffixes))
         raise WorkbookLoadError(
             "Unsupported workbook type "
             f"{reported_source.suffix!r}; supported types: {supported}"
@@ -51844,6 +52064,11 @@ def load_snapshot(
         _OoxmlXmlRootCache(source_filename=str(source))
     )
     try:
+        if suffix == ".xlsb":
+            return _load_xlsb_profile_snapshot_from_stable_source(
+                source,
+                reported_source,
+            )
         return _load_snapshot_from_stable_source(
             source,
             reported_source,
@@ -53341,7 +53566,7 @@ def profile_snapshot(
     additional profile object.
     """
     _preflight_profile_record_budget(snapshot, max_profile_records)
-    return {
+    profile: dict[str, object] = {
         "schema_version": "1.0",
         "workbook": snapshot.summary(),
         "sheets": [sheet.to_dict() for sheet in snapshot.sheets.values()],
@@ -53472,7 +53697,15 @@ def profile_snapshot(
         "chart_definitions": snapshot.chart_definitions.profile_dict(),
         "worksheet_embedded_controls": snapshot.worksheet_embedded_controls.profile_dict(),
         "power_query": snapshot.power_query.profile_dict(),
-        "defined_names": sorted(snapshot.defined_names),
+        # A profile-only reader can use name labels internally to reconstruct
+        # an indexed formula token, but they add no safe aggregate evidence to
+        # its public artifact. Keep the count in ``workbook`` while withholding
+        # those potentially sensitive identities from a narrowed profile.
+        "defined_names": (
+            sorted(snapshot.defined_names)
+            if snapshot.inspection_scope == "full"
+            else []
+        ),
         "calculation_settings": snapshot.calculation_settings,
         "features": {
             "external_reference_cells": [
@@ -53637,3 +53870,11 @@ def profile_snapshot(
             ],
         },
     }
+    if snapshot.inspection_scope != "full":
+        profile["coverage"] = {
+            "scope": snapshot.inspection_scope,
+            "supported_workflows": ["profile"],
+            "formula_text_coverage_complete": snapshot.formula_text_coverage_complete,
+            "limitations": list(snapshot.parser_warnings),
+        }
+    return profile

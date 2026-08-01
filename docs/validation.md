@@ -5,6 +5,43 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Bounded XLSB profile reader — 2026-08-01
+
+XLSB stores workbook records and formula expressions in the binary structures
+documented by Microsoft's [MS-XLSB format overview](https://learn.microsoft.com/en-us/openspecs/office_file_formats/MS-XLSB/acc8aa92-1f02-4167-99f5-84f9f676b95a),
+[RPN formula grammar](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/220abf5e-f561-4333-9fe0-7ac590ed4ad5),
+and [BrtBundleSh record](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xlsb/aeb720c9-ac1d-4019-ad22-3ad8b2b18777).
+FormulaFence implements a deliberately small, verified reader layer rather
+than translating an unknown token stream into plausible-looking formula text.
+
+The profile adapter was replayed against 18 public XLSB fixtures: the
+[calamine 0.36.1 test corpus](https://github.com/tafia/calamine/tree/0a24c2a9f1e38c0932c1299e633270dc730db505/tests)
+and selected Apache POI binary-workbook fixtures. Fifteen current ZIP packages
+loaded through the profile reader; twelve had complete verified formula-token
+coverage and three explicitly reported incomplete coverage. That included
+workbook catalogs, date systems, comments, hyperlinks, pictures, non-grid
+tabs, sparse sheets, shared strings with a case-variant package member name,
+and ordinary formula records. Two protected/non-ZIP fixtures failed the common
+archive preflight before an XLSB part was read. The retained `Simple.xlsb`
+fixture is explicitly an Excel 2007 Beta 2 example in Apache POI's
+[extractor test](https://github.com/apache/poi/blob/trunk/poi-ooxml/src/test/java/org/apache/poi/xssf/extractor/TestXSSFBEventBasedExcelExtractor.java);
+FormulaFence declines its incompatible historical bundle-sheet layout rather
+than guessing. No external workbook bytes were copied into this repository.
+
+Focused synthetic coverage verifies strict one/two-byte BIFF12 record headers,
+bounded records and binary parts, relationship XML grammar and targets,
+case-collision handling, shared strings, sheet catalogs, cells, defined names,
+formula cache framing, RPN operators/functions/references/UDFs, unsupported
+tokens, malformed records, aggregate memory ceilings, scope declarations, and
+JSON/Markdown redaction. A deterministic malformed-input sweep ran 10,000
+workbook/worksheet cases and 20,000 formula-token cases with zero unexpected
+implementation exceptions. The release-versioned 0.219.0 tree passed **1,584
+tests**; `git diff --check`, `ruff check .`, and `python -m compileall -q src
+tests` completed cleanly before packaging. The source distribution and wheel
+passed `twine check`; the wheel then installed into a fresh environment and
+successfully ran a generated case-variant-shared-string XLSB profile while
+withholding the generated cell value and formula text.
+
 ## Saved dynamic-array spill-result lint — 2026-08-01
 
 Microsoft's [dynamic-array spill guidance](https://support.microsoft.com/en-us/office/dynamic-array-formulas-and-spilled-array-behavior-205c6b06-03ba-4b05-a35f-5c69b7c6ed13)

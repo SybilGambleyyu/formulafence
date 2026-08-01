@@ -2068,9 +2068,39 @@ def profile_to_markdown(
     profile: dict[str, Any], *, max_bytes: int | None = None
 ) -> str:
     workbook = profile["workbook"]
+    coverage = profile.get("coverage")
+    coverage_lines: list[str] = []
+    if isinstance(coverage, dict):
+        scope = _markdown_escape(coverage.get("scope", "narrowed"))
+        workflows = coverage.get("supported_workflows", [])
+        if isinstance(workflows, list) and workflows:
+            workflow_text = ", ".join(_markdown_escape(item) for item in workflows)
+        else:
+            workflow_text = "not declared"
+        formula_coverage = coverage.get("formula_text_coverage_complete")
+        formula_coverage_text = (
+            "complete" if formula_coverage is True else "incomplete or unavailable"
+        )
+        coverage_lines = [
+            "## Inspection scope",
+            "",
+            f"- **Scope:** `{scope}`",
+            f"- **Supported workflows:** {workflow_text}",
+            f"- **Formula-text token coverage:** {formula_coverage_text}",
+            (
+                "- **Important:** Counts outside the stated scope are unassessed, not "
+                "evidence that the workbook lacks that feature."
+            ),
+        ]
+        limitations = coverage.get("limitations", [])
+        if isinstance(limitations, list):
+            for limitation in limitations:
+                coverage_lines.append(f"- {_markdown_escape(limitation)}")
+        coverage_lines.append("")
     initial_lines = [
         "# FormulaFence workbook profile",
         "",
+        *coverage_lines,
         f"- **Workbook:** `{workbook['path']}`",
         f"- **SHA-256:** `{workbook['sha256']}`",
         f"- **Sheets:** {workbook['sheet_count']}",

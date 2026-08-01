@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.216.0 — 2026-08-01
+
+- Add medium-severity `FF114` to `formulafence lint`: it emits one bounded
+  workbook-level operational-risk finding when an exact native `COUNTBLANK`,
+  `COUNTIF`, `COUNTIFS`, `SUMIF`, or `SUMIFS` call has a direct external A1
+  workbook-reference token in a top-level argument span. Microsoft documents
+  that this function family returns `#VALUE!` when its source workbook is
+  closed.
+- Keep the boundary narrow and private: only complete documented arity,
+  nonempty arguments, unqualified native spellings (optionally with `@`), and
+  explicit or package-indexed external A1 tokens qualify. Text-built or
+  computed references, external names, Tables, 3-D, malformed,
+  explicit-broken-reference, array-territory, and arbitrary namespace forms
+  stay quiet. JSON, Markdown, and SARIF retain only aggregate function, cell,
+  and argument counts—never source paths, workbook names, sheets, addresses,
+  formulas, or values. `FF114` does not suppress a same-cell saved `FF109`
+  value-error observation, because syntax cannot prove a source workbook's
+  state when the formula was last calculated.
+
 ## 0.215.0 — 2026-07-28
 
 - Add high-severity `FF113` to `formulafence lint`: it reports an exact native

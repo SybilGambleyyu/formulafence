@@ -101,6 +101,21 @@ financial correctness or replace model review.
   explicit-broken-reference, namespaced, and all array territory stay outside
   the boundary. It emits only a location plus aggregate function/error-class
   counts; formulas, literal values, dates, and references remain private.
+  Its closed-external-workbook criteria-function signal is deliberately one
+  workbook-level medium-severity operational risk, rather than a per-formula
+  warning. It accepts only unqualified native `COUNTBLANK`, `COUNTIF`,
+  `COUNTIFS`, `SUMIF`, and `SUMIFS` spellings (optionally with `@`) with
+  complete nonempty documented arity, and only when a top-level argument span
+  contains a strict direct external A1 reference token. It supports explicit
+  and package-indexed link syntax, but does not resolve any link, inspect its
+  source-open state, evaluate a formula, or infer a present `#VALUE!` result.
+  Text-built or computed references, external names, Tables, 3-D references,
+  malformed or explicit-broken-reference formulas, arbitrary namespaces, and
+  all array territory stay outside the boundary. It emits aggregate function,
+  formula-cell, and external-reference-argument counts only; source paths,
+  workbook names, sheets, addresses, formulas, and cell values remain private.
+  A saved `#VALUE!` stays independently reportable because the syntax cannot
+  prove the source workbook's state at the prior calculation.
   Its `MMULT` matrix-dimension signal accepts only the unqualified native
   spelling (optionally with `@`) with exactly two comma-separated arguments,
   each one bounded, internal direct A1 cell/range or whole-column reference.
@@ -206,7 +221,8 @@ financial correctness or replace model review.
   unsorted-direct-numeric-vector counts, XLOOKUP/XMATCH unsupported-literal-
   mode counts, direct-SUM overlapping-pair and qualifying-call counts,
   AGGREGATE literal-argument error-class, native-MOD zero-divisor-call, and
-  date-function unsupported-code error-class counts, direct-
+  date-function unsupported-code error-class, and closed-external-workbook
+  criteria-function aggregate counts, direct-
   or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-
@@ -215,6 +231,7 @@ financial correctness or replace model review.
   `INDEX` position values or direct array ranges, approximate-lookup key values
   or table ranges, AGGREGATE literal values or references, MOD arguments,
   date-function code values or dates,
+  closed-external-workbook paths, workbook names, sheets, or addresses,
   direct-SUM range
   spellings or values, Table identities, or
   Table master formulas.

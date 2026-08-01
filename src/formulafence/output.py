@@ -6305,8 +6305,10 @@ def lint_to_markdown(
             "It reports a formula as unlocked only for an explicit direct cell assignment "
             "on a protected worksheet, and reports explicitly incomplete manual calculation "
             "for a formula workbook. It also reports stored error-checking suppressions "
-            "and isolated interior Excel Table calculated-column exceptions. It does not "
-            "evaluate formulas or expose formula text.",
+            "and isolated interior Excel Table calculated-column exceptions, plus a "
+            "bounded workbook-level risk when selected criteria functions directly "
+            "reference external workbooks. It does not evaluate formulas, expose formula "
+            "text, or expose external-link material.",
             "",
             "## Findings",
             "",
@@ -6797,6 +6799,45 @@ def lint_to_markdown(
                     ),
                 )
             )
+    closed_external_criteria_function_evidence = [
+        finding["details"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF114"
+    ]
+    if closed_external_criteria_function_evidence:
+        lines.extend(["## Closed-external-workbook criteria-function evidence", ""])
+        for evidence in closed_external_criteria_function_evidence:
+            function_counts = ", ".join(
+                f"{_markdown_code(function_name)} "
+                f"{_markdown_escape(evidence[count_key])}"
+                for function_name, count_key in (
+                    ("COUNTBLANK", "countblank_call_count"),
+                    ("COUNTIF", "countif_call_count"),
+                    ("COUNTIFS", "countifs_call_count"),
+                    ("SUMIF", "sumif_call_count"),
+                    ("SUMIFS", "sumifs_call_count"),
+                )
+            )
+            call_count = evidence["closed_external_criteria_function_call_count"]
+            formula_cell_count = evidence["affected_formula_cell_count"]
+            argument_count = evidence[
+                "direct_external_a1_reference_argument_count"
+            ]
+            lines.append(
+                "- Workbook: {call_count} qualifying {call_noun} across "
+                "{formula_cell_count} formula {cell_noun} contain {argument_count} direct "
+                "external A1 reference {argument_noun} ({function_counts}). Excel returns "
+                "`#VALUE!` if a source workbook is closed."
+                .format(
+                    call_count=_markdown_escape(call_count),
+                    call_noun="call" if call_count == 1 else "calls",
+                    formula_cell_count=_markdown_escape(formula_cell_count),
+                    cell_noun="cell" if formula_cell_count == 1 else "cells",
+                    argument_count=_markdown_escape(argument_count),
+                    argument_noun="argument" if argument_count == 1 else "arguments",
+                    function_counts=function_counts,
+                )
+            )
     circular_reference_evidence = [
         (finding["rule_id"], finding["location"], finding["details"])
         for finding in payload["findings"]
@@ -6979,6 +7020,10 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
         "FF113": (
             "A YEARFRAC, WEEKDAY, or WEEKNUM call uses an unsupported direct "
             "literal code."
+        ),
+        "FF114": (
+            "Criteria functions directly reference an external workbook; Excel returns "
+            "#VALUE! if its source workbook is closed."
         ),
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})

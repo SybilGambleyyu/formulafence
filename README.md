@@ -73,7 +73,7 @@ legacy-lookup return-index and approximate-sort, `RANDBETWEEN` literal-bound,
 `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` literal-argument, direct static `SUM`
 argument-range-overlap, direct literal `AGGREGATE` code/arity, native `MOD`
 direct literal zero-divisor, native date-function literal codes, infix direct
-literal zero-divisor,
+literal zero-divisor, and closed-external-workbook criteria-function risks,
 explicit-broken-reference, and saved-result risks that a version
 diff cannot see. It reports a copied-formula
 interruption only
@@ -89,11 +89,12 @@ literal `INDEX` row/column positions, direct literal `LARGE`/`SMALL` ranks,
 direct literal `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH` arguments, direct static
 `SUM` argument-range overlaps, direct literal `AGGREGATE` code/arity errors,
 native `MOD` direct literal zero divisors, direct literal date-function codes,
-and infix direct literal zero divisors, saved division-by-zero,
+infix direct literal zero divisors, and closed-external-workbook
+criteria-function risks, saved division-by-zero,
 numeric-error, name-error, and
 value-error results,
 explicit-broken-reference, and saved broken-reference-result signals. Together
-these produce thirty-two reviewable findings:
+these produce thirty-three reviewable findings:
 
 - `FF082`: a non-formula interruption. Blanks and stored error values are high;
   numeric/manual values are medium; textual markers are low.
@@ -155,6 +156,8 @@ these produce thirty-two reviewable findings:
 - `FF112` (high): a native `MOD` call uses a direct literal zero divisor.
 - `FF113` (high): a native `YEARFRAC`, `WEEKDAY`, or `WEEKNUM` call uses an
   unsupported direct literal code.
+- `FF114` (medium): native criteria functions directly reference an external
+  workbook, which Excel documents as a `#VALUE!` risk when the source is closed.
 
 Use `--fail-on critical` to gate explicit broken-reference operands, or
 `--fail-on high` to also gate blank/error interruptions and direct static
@@ -174,8 +177,9 @@ results, and saved numeric-error, name-error, value-error, and broken-reference
 results.
 Use `--fail-on medium` to additionally require review of manual-value,
 formula-outlier, aggregate-range, explicit formula-protection,
-incomplete-manual-calculation, error-checking-suppression, and Table
-calculated-column exceptions.
+incomplete-manual-calculation, error-checking-suppression, Table
+calculated-column exceptions, and closed-external-workbook criteria-function
+risks.
 `FF084` intentionally ignores
 named/table/external/3-D references, multi-range or computed expressions, a
 formula before or beside its range, one-cell gaps, nonnumeric gaps, tokenizer
@@ -367,6 +371,25 @@ reference, decimal/scientific, array, malformed, explicit-broken-reference,
 array-territory, and arbitrary namespace forms remain quiet. Its evidence
 retains only the affected location and aggregate function/error-class counts—
 never a formula, literal value, date, or reference.
+`FF114` is a single workbook-level, medium-severity operational-risk finding.
+It accepts only native `COUNTBLANK`, `COUNTIF`, `COUNTIFS`, `SUMIF`, and
+`SUMIFS` calls (optionally with `@`) with their complete documented arity and
+nonempty arguments: one for `COUNTBLANK`, two for `COUNTIF`, two through 254
+even arguments for `COUNTIFS`, two or three for `SUMIF`, and three through 255
+odd arguments for `SUMIFS`. At least one top-level argument span must contain a
+strict direct external A1 reference token, either an explicit workbook spelling
+or Excel's package-indexed external-link spelling. It does not resolve a link,
+inspect whether a source workbook is open, evaluate a formula, or infer a
+current error. Text-built or computed external references, external names,
+Tables, 3-D references, malformed or explicit-broken-reference formulas,
+array territory, and arbitrary namespaces remain quiet. Excel documents that
+these criteria functions return `#VALUE!` when their referenced source workbook
+is closed, so FormulaFence reports a bounded review risk rather than claiming a
+present calculation error. The evidence retains only aggregate function, cell,
+and external-reference-argument counts—never a workbook path, sheet, address,
+formula, or cell value. A saved `#VALUE!` result remains independently
+reportable as `FF109`, because direct syntax alone cannot prove that a source
+was closed when the workbook was last calculated.
 `FF106` accepts only a well-formed stored formula-result cache whose exact
 private error classification is division by zero. It does not calculate the
 formula, inspect its formula text, retain its cached value, or infer that the
@@ -414,7 +437,8 @@ counts, `INDEX` out-of-range-literal-index counts, and approximate-lookup
 unsorted-direct-numeric-vector counts, and XLOOKUP/XMATCH unsupported-literal-
 mode counts, LARGE/SMALL invalid-literal-rank counts, text-function
 invalid-literal-argument counts, direct-zero-divisor and native-MOD
-zero-divisor counts, date-function unsupported-code error-class counts, direct-SUM
+zero-divisor counts, date-function unsupported-code error-class counts,
+closed-external-workbook criteria-function aggregate counts, direct-SUM
 overlapping-pair and overlapping-call counts, and saved-result scopes—never
 formula text, cached values, ignored-error target ranges, direct
 conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup range spellings,
@@ -422,7 +446,8 @@ conditional-aggregate, `SUMPRODUCT`, `MMULT`, legacy-lookup range spellings,
 or table ranges, LARGE/SMALL rank values or direct array ranges, text-function
 literal values or text operands, zero-divisor literal spellings, numerators, or
 MOD arguments, date-function code values or dates, direct-SUM range spellings
-or values, or Table master formulas. `FF089` accepts
+or values, closed-external-workbook paths, sheets, or addresses, or Table
+master formulas. `FF089` accepts
 only a valid saved formula-result cache whose exact error is `#REF!`; `FF106`
 separately accepts an exact saved
 division-by-zero error; `FF107` separately accepts an exact saved numeric
@@ -1079,7 +1104,7 @@ allowed_changes:
 | Semantic cell diff | Formula/value additions, removals, and changes—not ZIP/XML noise |
 | Impact trace | Downstream formula cells and deterministic shortest dependency-path samples, including cross-sheet, static named ranges, formula-defined names, static named `LAMBDA` calls, `LET`/inline-`LAMBDA`, Excel-table, 3-D worksheet references, fixed legacy CSE result members, and currently observed dynamic-array result members |
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
-| Formula lint | Conservative blank/error, manual-value, text-marker, and formula-outlier candidates inside a single workbook's copied blocks; narrowly scoped simple aggregate ranges that stop before a contiguous numeric gap; direct static conditional-aggregate range-shape mismatches for `SUMIFS`, `COUNTIFS`, `AVERAGEIFS`, `MAXIFS`, and `MINIFS`, direct static `SUMPRODUCT` array-shape mismatches, direct static `MMULT` inner-dimension mismatches, direct static `SUM` argument-range overlaps, direct literal `AGGREGATE` function-code/option/ref2 errors, native `MOD` direct literal zero divisors, direct literal `YEARFRAC`/`WEEKDAY`/`WEEKNUM` unsupported codes, direct static `VLOOKUP`/`HLOOKUP` out-of-range literal return indices, direct literal `XLOOKUP`/`XMATCH` unsupported mode codes, and direct literal `LARGE`/`SMALL` impossible ranks; explicit direct unlocks on protected formula cells; and formula workbooks explicitly saved with incomplete manual calculation; copied-pattern findings require three local matching peers |
+| Formula lint | Conservative blank/error, manual-value, text-marker, and formula-outlier candidates inside a single workbook's copied blocks; narrowly scoped simple aggregate ranges that stop before a contiguous numeric gap; direct static conditional-aggregate range-shape mismatches for `SUMIFS`, `COUNTIFS`, `AVERAGEIFS`, `MAXIFS`, and `MINIFS`, direct static `SUMPRODUCT` array-shape mismatches, direct static `MMULT` inner-dimension mismatches, direct static `SUM` argument-range overlaps, direct literal `AGGREGATE` function-code/option/ref2 errors, native `MOD` direct literal zero divisors, direct literal `YEARFRAC`/`WEEKDAY`/`WEEKNUM` unsupported codes, and workbook-level closed-external-workbook risks in selected native criteria functions; direct static `VLOOKUP`/`HLOOKUP` out-of-range literal return indices, direct literal `XLOOKUP`/`XMATCH` unsupported mode codes, and direct literal `LARGE`/`SMALL` impossible ranks; explicit direct unlocks on protected formula cells; and formula workbooks explicitly saved with incomplete manual calculation; copied-pattern findings require three local matching peers |
 | Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/HTML/SARIF for CI |
 | Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |

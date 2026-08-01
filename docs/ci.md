@@ -95,7 +95,8 @@ static-circular-reference, conditional-aggregate and `SUMPRODUCT` range-shape,
 `RANDBETWEEN` literal-bound, `SUBTOTAL` function-code, `INDEX` literal-position,
 `LARGE`/`SMALL` literal-rank, `LEFT`/`RIGHT`/`MID`/`FIND`/`SEARCH`
 literal-argument, direct literal `AGGREGATE` code/arity, native `MOD` direct
-literal zero-divisor, native date-function literal codes, explicit-broken-reference,
+literal zero-divisor, native date-function literal codes,
+closed-external-workbook criteria-function risks, explicit-broken-reference,
 and saved-result risks before or after the normal change review:
 
 ```yaml
@@ -157,7 +158,10 @@ option is outside its documented domain, or whose functions 14–19 omit the
 required second reference. `FF112` is a high-severity native `MOD` call whose
 direct literal divisor is zero. `FF113` is a high-severity native `YEARFRAC`,
 `WEEKDAY`, or `WEEKNUM` call whose explicitly supplied direct literal code is
-outside its documented domain. The
+outside its documented domain. `FF114` is a medium-severity workbook-level
+risk when native `COUNTBLANK`, `COUNTIF`, `COUNTIFS`, `SUMIF`, or `SUMIFS`
+directly reference an external workbook; Excel returns `#VALUE!` if the source
+workbook is closed. The
 copied-formula signal requires two matching immediate formula peers
 and a third contiguous supporting peer.
 `FF084` accepts only a pure
@@ -314,6 +318,20 @@ value. Computed, reference,
 decimal/scientific, array, malformed, explicit-broken-reference, array
 territory, and arbitrary namespace forms stay quiet. It emits only a location
 plus aggregate function/error-class counts.
+`FF114` is one bounded workbook-level risk, not one finding per copied formula.
+It accepts only unqualified native `COUNTBLANK`, `COUNTIF`, `COUNTIFS`,
+`SUMIF`, or `SUMIFS` spellings (optionally with `@`) with complete, nonempty
+documented arity, and only when a top-level argument span contains one strict
+direct external A1 reference token. Explicit and package-indexed external-link
+spellings are supported; text-built or computed references, external names,
+Tables, 3-D references, malformed or explicit-broken-reference formulas,
+array territory, and arbitrary namespaces stay quiet. The lint does not
+resolve a link, inspect source-open state, or evaluate a formula, so the
+medium-severity finding describes the documented closed-source-workbook risk,
+not a proven current error. It emits only aggregate function, cell, and
+external-reference-argument counts—never a workbook path, sheet, address,
+formula, or cell value. A same-cell saved `#VALUE!` remains independently
+reportable as `FF109`.
 `FF106` accepts only a well-formed stored formula-result cache whose exact
 private error classification is division by zero. It neither calculates nor
 inspects a formula, retains no cached value, and does not infer that the
@@ -358,7 +376,8 @@ out-of-range-literal-index counts, and approximate-lookup unsorted-direct-
 numeric-vector counts, LARGE/SMALL invalid-literal-rank counts, and
 text-function invalid-literal-argument counts, direct-zero-divisor and native
 MOD zero-divisor counts, date-function unsupported-code error-class counts,
-direct-SUM overlapping-pair and overlapping-call
+closed-external-workbook criteria-function aggregate counts, direct-SUM
+overlapping-pair and overlapping-call
 counts, AGGREGATE
 literal-argument error-class counts, and saved-result
 scopes, not formula text, cached values,
@@ -371,7 +390,8 @@ operands, zero-divisor literal spellings, numerators, or MOD arguments,
 date-function code values or dates, AGGREGATE
 literal
 values or references, direct-SUM range
-spellings or values, Table identities, or Table master formulas. `FF089`
+spellings or values, closed-external-workbook paths, sheets, or addresses,
+Table identities, or Table master formulas. `FF089`
 accepts only an exact saved `#REF!` formula result and skips a location already
 covered by `FF088`; `FF106` separately
 accepts an exact saved division-by-zero error and skips a location already

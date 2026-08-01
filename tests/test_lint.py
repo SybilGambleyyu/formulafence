@@ -650,7 +650,18 @@ def test_lint_conditional_aggregate_range_shape_rule_skips_ambiguous_forms(
 
     report = lint_snapshot(snapshot)
 
-    assert [finding.rule_id for finding in report.findings] == ["FF088"]
+    assert [finding.rule_id for finding in report.findings] == ["FF114", "FF088"]
+    assert report.findings[0].details == {
+        "closed_external_criteria_function_call_count": 1,
+        "affected_formula_cell_count": 1,
+        "direct_external_a1_reference_argument_count": 1,
+        "countblank_call_count": 0,
+        "countif_call_count": 0,
+        "countifs_call_count": 0,
+        "sumif_call_count": 0,
+        "sumifs_call_count": 1,
+        "evidence_scope": "direct_external_a1_criteria_function_arguments",
+    }
 
 
 def test_lint_conditional_aggregate_range_shape_rule_replaces_generic_outlier(
@@ -2480,6 +2491,116 @@ def test_lint_date_function_literal_code_candidates_share_the_structural_cap(
         match="max_formula_pattern_findings=1",
     ):
         lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_reports_closed_external_criteria_function_risk_once(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=COUNTBLANK('[Source.xlsx]Data'!$A$2:$A$9)",
+            "B3": "=COUNTIF('[Source.xlsx]Data'!$B$2:$B$9,1)",
+            "B4": "=COUNTIFS([1]Data!A1:A9,1,[1]Data!B1:B9,2)",
+            "B5": "=SUMIF('[Source.xlsx]Data'!$C$2:$C$9,1,'[Source.xlsx]Data'!$D$2:$D$9)",
+            "B6": "=SUMIFS('[Source.xlsx]Data'!$E$2:$E$9,'[Source.xlsx]Data'!$F$2:$F$9,1)",
+        },
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF114", "medium", None)]
+    assert report.findings[0].details == {
+        "closed_external_criteria_function_call_count": 5,
+        "affected_formula_cell_count": 5,
+        "direct_external_a1_reference_argument_count": 8,
+        "countblank_call_count": 1,
+        "countif_call_count": 1,
+        "countifs_call_count": 1,
+        "sumif_call_count": 1,
+        "sumifs_call_count": 1,
+        "evidence_scope": "direct_external_a1_criteria_function_arguments",
+    }
+
+
+def test_lint_closed_external_criteria_function_rule_skips_ambiguous_forms(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "B2": "=COUNTIF(C2:C9,1)",
+            "B3": "=COUNTIF('[Source.xlsx]Data'!A2:A9)",
+            "B4": "=COUNTIF(\"'[Source.xlsx]Data'!A2:A9\",1)",
+            "B5": "=Vendor.COUNTIF('[Source.xlsx]Data'!A2:A9,1)",
+            "B6": "=COUNTIF('[Source.xlsx]Data'!A2:A9,#REF!)",
+        },
+    )
+
+    assert "FF114" not in {finding.rule_id for finding in lint_snapshot(snapshot).findings}
+
+    array_territory = _snapshot(
+        tmp_path,
+        {"B2": "=COUNTIF('[Source.xlsx]Data'!A2:A9,1)"},
+    )
+    array_territory.dynamic_array_formula_ranges = (
+        ArrayFormulaRange(
+            sheet="Model",
+            anchor="B2",
+            ref="B2:C2",
+            min_column=2,
+            min_row=2,
+            max_column=3,
+            max_row=2,
+        ),
+    )
+
+    assert "FF114" not in {
+        finding.rule_id for finding in lint_snapshot(array_territory).findings
+    }
+
+
+def test_lint_closed_external_criteria_function_risk_honors_finding_cap(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot(
+        tmp_path,
+        {
+            "E2": "=SUM(C2:C4,C4:C6)",
+            "F2": "=COUNTIF('[Source.xlsx]Data'!A2:A9,1)",
+        },
+    )
+
+    with pytest.raises(
+        FormulaFenceError,
+        match="max_formula_pattern_findings=1",
+    ):
+        lint_snapshot(snapshot, max_formula_pattern_findings=1)
+
+
+def test_lint_closed_external_criteria_function_risk_keeps_saved_value_error(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_formula_cached_result_model(
+            tmp_path / "closed-external-criteria-value-error.xlsx",
+            error_formula="=COUNTIF('[Source.xlsx]Data'!A2:A9,1)",
+            error_result="#VALUE!",
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [
+        ("FF114", "medium", None),
+        ("FF109", "high", ("Report", "B5")),
+    ]
 
 
 def test_lint_reports_static_multi_cell_cycle_when_iteration_is_disabled(
@@ -4369,6 +4490,59 @@ def test_lint_date_function_literal_code_renderers_keep_values_private(
                 "text": (
                     "A YEARFRAC, WEEKDAY, or WEEKNUM call uses an unsupported "
                     "direct literal code."
+                )
+            },
+        }
+    ]
+
+
+def test_lint_closed_external_criteria_function_renderers_keep_links_private(
+    tmp_path: Path,
+) -> None:
+    workbook = Workbook()
+    model = workbook.active
+    model.title = "Model"
+    model["B2"] = (
+        "=COUNTIF('../confidential/[PrivateSource.xlsx]Private Inputs'!$C$2:$C$9,1)"
+    )
+    path = tmp_path / "private-closed-external-criteria-function.xlsx"
+    workbook.save(path)
+
+    report = lint_snapshot(load_snapshot(path))
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "PrivateSource" not in rendered
+        assert "confidential" not in rendered
+        assert "Private Inputs" not in rendered
+        assert "$C$2" not in rendered
+        assert "COUNTIF('../" not in rendered
+        assert "FF114" in rendered
+    assert "## Closed-external-workbook criteria-function evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert "locations" not in result
+    assert result["properties"] == {
+        "severity": "medium",
+        "closed_external_criteria_function_call_count": 1,
+        "affected_formula_cell_count": 1,
+        "direct_external_a1_reference_argument_count": 1,
+        "countblank_call_count": 0,
+        "countif_call_count": 1,
+        "countifs_call_count": 0,
+        "sumif_call_count": 0,
+        "sumifs_call_count": 0,
+        "evidence_scope": "direct_external_a1_criteria_function_arguments",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF114",
+            "name": "FF114",
+            "shortDescription": {
+                "text": (
+                    "Criteria functions directly reference an external workbook; Excel "
+                    "returns #VALUE! if its source workbook is closed."
                 )
             },
         }

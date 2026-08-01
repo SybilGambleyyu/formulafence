@@ -399,6 +399,14 @@ _WEEKDAY_RETURN_TYPE_CODES = frozenset(
 _WEEKNUM_RETURN_TYPE_CODES = frozenset(
     (False, str(code)) for code in (1, 2, 11, 12, 13, 14, 15, 16, 17, 21)
 )
+# Excel documents a closed-workbook limitation for this deliberately small
+# criteria-function family. Keep the exact native spellings separate from the
+# broader conditional-aggregate shape contracts above: this boundary concerns
+# a direct external reference and an operational workbook state, not range
+# shape or calculated values.
+_CLOSED_EXTERNAL_CRITERIA_FUNCTIONS = frozenset(
+    {"COUNTBLANK", "COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS"}
+)
 
 
 @dataclass(frozen=True)
@@ -3262,6 +3270,106 @@ def date_function_literal_code_mismatch_counts(
         invalid_weekday_return_type_count,
         invalid_weeknum_return_type_count,
     )
+
+
+def _is_direct_external_workbook_a1_reference_token(token: object) -> bool:
+    """Return whether one formula token is a strict direct external A1 ref."""
+    if not (
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "RANGE"
+    ):
+        return False
+    value = str(getattr(token, "value", "")).strip()
+    # Avoid invoking the full direct-reference parsers for ordinary local A1
+    # references. Both supported external spellings necessarily carry all three
+    # delimiters. Some complex external syntaxes also pass this cheap gate, but
+    # the strict parsers below reject anything other than one A1 destination.
+    if "[" not in value or "]" not in value or "!" not in value:
+        return False
+    return bool(
+        parse_external_workbook_reference(value) is not None
+        or parse_external_link_indexed_workbook_reference(value) is not None
+    )
+
+
+def closed_external_criteria_function_calls(
+    formula: str,
+) -> tuple[tuple[str, int], ...]:
+    """Return native criteria calls with direct external A1 arguments.
+
+    Each tuple is ``(function_name, direct_external_a1_argument_count)`` for
+    one exact native ``COUNTBLANK``, ``COUNTIF``, ``COUNTIFS``, ``SUMIF``, or
+    ``SUMIFS`` call. The function accepts only the documented complete arity
+    for that function and only when at least one top-level argument span
+    contains a direct external A1 reference token. Both explicit
+    ``[Book.xlsx]Sheet!A1`` and package-indexed ``[N]Sheet!A1`` spellings are
+    recognized, but no source path, workbook name, sheet, address, or value is
+    returned. This is a static operational-risk signal: Excel documents a
+    ``#VALUE!`` result for these criteria functions when their source workbook
+    is closed. It does not inspect workbook state, resolve links, evaluate the
+    call, or infer an error result. Text-built or computed external references,
+    malformed, explicit-broken-reference, and arbitrary namespace forms remain
+    outside the contract.
+    """
+    tokens, _, _ = _tokenize_formula(
+        formula,
+        preserve_literal_spill_operator=True,
+    )
+    if tokens is None:
+        return ()
+    if any(
+        getattr(token, "type", None) == "OPERAND"
+        and getattr(token, "subtype", None) == "ERROR"
+        and str(getattr(token, "value", "")).strip().upper() == "#REF!"
+        for token in tokens
+    ):
+        return ()
+
+    calls: list[tuple[str, int]] = []
+    for position, token in enumerate(tokens):
+        function_name = _unqualified_native_function_name(token)
+        if function_name not in _CLOSED_EXTERNAL_CRITERIA_FUNCTIONS:
+            continue
+        closing = _matching_group_close(tokens, position, len(tokens))
+        if closing is None:
+            continue
+        arguments = _function_argument_spans(tokens, position + 1, closing)
+        argument_count = len(arguments)
+        if (
+            (function_name == "COUNTBLANK" and argument_count != 1)
+            or (function_name == "COUNTIF" and argument_count != 2)
+            or (
+                function_name == "COUNTIFS"
+                and not (2 <= argument_count <= 254 and argument_count % 2 == 0)
+            )
+            or (function_name == "SUMIF" and argument_count not in {2, 3})
+            or (
+                function_name == "SUMIFS"
+                and not (3 <= argument_count <= 255 and argument_count % 2 == 1)
+            )
+            or any(
+                not any(
+                    not _is_whitespace(tokens[argument_position])
+                    for argument_position in range(start, end)
+                )
+                for start, end in arguments
+            )
+        ):
+            continue
+
+        direct_external_a1_argument_count = 0
+        for start, end in arguments:
+            if any(
+                _is_direct_external_workbook_a1_reference_token(
+                    tokens[argument_position]
+                )
+                for argument_position in range(start, end)
+            ):
+                direct_external_a1_argument_count += 1
+        if direct_external_a1_argument_count:
+            calls.append((function_name, direct_external_a1_argument_count))
+
+    return tuple(calls)
 
 
 def index_literal_position_mismatch_count(formula: str) -> int:

@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Closed-external-workbook criteria-function lint — 2026-08-01
+
+Microsoft's [COUNTIF/COUNTIFS `#VALUE!` guidance](https://support.microsoft.com/en-us/excel/how-to-correct-a-value-error-in-the-countif-countifs-function)
+states that `COUNTIF` and `COUNTIFS` referring to a cell or range in a closed
+workbook return `#VALUE!`, and identifies `SUMIF`, `SUMIFS`, and `COUNTBLANK`
+as the same known issue. Its parallel
+[SUMIF/SUMIFS `#VALUE!` guidance](https://support.microsoft.com/en-us/excel/how-to-correct-a-value-error-in-the-sumif-sumifs-function)
+states the same closed-workbook limitation for `SUMIF` and `SUMIFS`. `FF114`
+therefore reports one workbook-level operational risk only when an unqualified
+native `COUNTBLANK`, `COUNTIF`, `COUNTIFS`, `SUMIF`, or `SUMIFS` call has valid,
+complete, nonempty arity and a top-level argument span containing a strict
+direct external A1 reference token. It does not resolve a link, inspect whether
+a source workbook is open, evaluate a formula, or claim that a current result
+is erroneous. Text-built or computed references, external names, Tables, 3-D
+references, malformed or explicit-broken-reference formulas, array territory,
+and arbitrary namespaces remain quiet.
+
+Focused helper, lint, CLI, and renderer coverage exercises ordinary and `@`
+native spellings; every supported function; direct and package-indexed A1
+syntax; multiple external argument spans; quiet local, text-built, named,
+Table, 3-D, malformed, broken-reference, and namespaced forms; array territory;
+the shared finding cap; medium-severity CI gating; private JSON/Markdown/SARIF
+rendering; and coexistence with an independently preserved saved `#VALUE!`
+result.
+
+An aggregate-only raw OOXML census of public SpreadsheetBench v0.1 expanded
+ordinary shared-formula instances without retaining formula material. Across
+5,464 workbook artifacts it inspected 1,200,528 ordinary formula instances,
+with zero tokenization failures. It found 444,523 complete native calls with a
+direct external A1 argument under this rule's narrow syntax boundary:
+439,201 `COUNTIFS` calls and 5,322 `SUMIF` calls, covering 2,206,648 external
+reference argument spans. The same scan found 15,949 saved `#VALUE!` formula
+instances in that candidate population (26,929 qualifying calls and 119,740
+external argument spans). This is prevalence and last-saved-state context, not
+proof that any source workbook was closed or that the external dependency caused
+the cached error; `FF114` therefore remains medium severity and does not
+suppress `FF109`. The census emitted aggregate counters only: no workbook path,
+formula, coordinate, reference, value, or literal spelling was retained or
+printed.
+
 ## Native date-function literal-code lint — 2026-07-28
 
 Microsoft's [YEARFRAC reference](https://support.microsoft.com/en-us/excel/functions/yearfrac-function)

@@ -468,6 +468,18 @@ def test_lint_date_function_literal_code_is_high(tmp_path) -> None:
     assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
 
 
+def test_lint_closed_external_criteria_function_risk_is_medium(tmp_path) -> None:
+    workbook_path = tmp_path / "closed-external-criteria-function.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Model"
+    worksheet["B2"] = "=COUNTIF('[Source.xlsx]Data'!A2:A9,1)"
+    workbook.save(workbook_path)
+
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "medium"]) == 1
+
+
 def test_lint_direct_sum_overlap_is_high(tmp_path) -> None:
     workbook_path = tmp_path / "direct-sum-overlap.xlsx"
     workbook = Workbook()

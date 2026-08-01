@@ -19,6 +19,7 @@ from formulafence.formulas import (
     aggregate_literal_argument_mismatch_counts,
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
+    closed_external_criteria_function_calls,
     conditional_aggregate_range_shape_mismatches,
     date_function_literal_code_mismatch_counts,
     direct_sum_argument_reference_groups,
@@ -1470,6 +1471,67 @@ def _ignored_error_suppression_details(
     }
 
 
+def _closed_external_criteria_function_details(
+    snapshot: WorkbookSnapshot,
+    array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
+) -> dict[str, object] | None:
+    """Return private aggregate evidence for Excel's closed-link limitation.
+
+    Microsoft documents that COUNTBLANK, COUNTIF, COUNTIFS, SUMIF, and SUMIFS
+    can return ``#VALUE!`` when a directly referenced external source workbook
+    is closed. This is deliberately one workbook-level, medium-severity
+    operational risk rather than one finding per copied formula: FormulaFence
+    cannot inspect whether a source is currently open, and reports only bounded
+    function/cell/argument counts instead of references or link material.
+    """
+    function_names = (
+        "COUNTBLANK",
+        "COUNTIF",
+        "COUNTIFS",
+        "SUMIF",
+        "SUMIFS",
+    )
+    function_call_counts = {function_name: 0 for function_name in function_names}
+    affected_formula_cell_count = 0
+    direct_external_a1_reference_argument_count = 0
+
+    for location in sorted(snapshot.cells, key=_location_sort_key):
+        if (
+            location in snapshot.broken_references
+            or not _eligible_formula(snapshot, location, array_ranges_by_sheet)
+        ):
+            continue
+        formula = snapshot.cells[location].formula
+        if formula is None:
+            continue
+        calls = closed_external_criteria_function_calls(formula)
+        if not calls:
+            continue
+        affected_formula_cell_count += 1
+        for function_name, external_argument_count in calls:
+            function_call_counts[function_name] += 1
+            direct_external_a1_reference_argument_count += external_argument_count
+
+    closed_external_criteria_function_call_count = sum(function_call_counts.values())
+    if not closed_external_criteria_function_call_count:
+        return None
+    return {
+        "closed_external_criteria_function_call_count": (
+            closed_external_criteria_function_call_count
+        ),
+        "affected_formula_cell_count": affected_formula_cell_count,
+        "direct_external_a1_reference_argument_count": (
+            direct_external_a1_reference_argument_count
+        ),
+        "countblank_call_count": function_call_counts["COUNTBLANK"],
+        "countif_call_count": function_call_counts["COUNTIF"],
+        "countifs_call_count": function_call_counts["COUNTIFS"],
+        "sumif_call_count": function_call_counts["SUMIF"],
+        "sumifs_call_count": function_call_counts["SUMIFS"],
+        "evidence_scope": "direct_external_a1_criteria_function_arguments",
+    }
+
+
 def _direct_self_reference_locations(
     snapshot: WorkbookSnapshot,
     array_ranges_by_sheet: dict[str, tuple[ArrayFormulaRange, ...]],
@@ -1804,6 +1866,8 @@ def lint_snapshot(
     an explicitly unlocked formula on a protected sheet, an explicit incomplete
     manual-calculation state for a formula workbook, stored error-checking
     suppressions, isolated interior Excel Table calculated-column exceptions,
+    direct external A1 references in criteria functions subject to Excel's
+    closed-source-workbook limitation,
     direct static conditional-aggregate and ``SUMPRODUCT`` range-shape
     mismatches, direct static ``MMULT`` matrix-dimension mismatches, direct
     static legacy-lookup return-index mismatches, direct static ``CHOOSE``
@@ -2783,6 +2847,26 @@ def lint_snapshot(
                 message=(
                     "Workbook suppresses Excel error-checking prompts; review warnings "
                     "may be hidden."
+                ),
+                details=details,
+            )
+        )
+    if details := _closed_external_criteria_function_details(
+        snapshot,
+        array_ranges_by_sheet,
+    ):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF114",
+                severity="medium",
+                message=(
+                    "Criteria functions directly reference an external workbook; Excel "
+                    "returns #VALUE! if its source workbook is closed."
                 ),
                 details=details,
             )

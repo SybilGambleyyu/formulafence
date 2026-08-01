@@ -7,6 +7,7 @@ from formulafence.formulas import (
     aggregate_literal_argument_mismatch_counts,
     approximate_lookup_direct_table_references,
     choose_literal_index_mismatch_count,
+    closed_external_criteria_function_calls,
     conditional_aggregate_range_shape_mismatches,
     date_function_literal_code_mismatch_counts,
     direct_sum_argument_reference_groups,
@@ -530,6 +531,44 @@ def test_date_function_literal_code_mismatch_counts_keep_ambiguous_forms_quiet()
 
     for formula in quiet_formulas:
         assert date_function_literal_code_mismatch_counts(formula) == (0, 0, 0, 0)
+
+
+def test_closed_external_criteria_function_calls_find_native_direct_a1_forms() -> None:
+    formula = (
+        "=COUNTBLANK('[Source.xlsx]Data'!$A$2:$A$9)"
+        "+@COUNTIF('[Source.xlsx]Data'!$B$2:$B$9,1)"
+        "+COUNTIFS([1]Data!A1:A9,1,[1]Data!B1:B9,2)"
+        "+SUMIF('[Source.xlsx]Data'!$C$2:$C$9,1,'[Source.xlsx]Data'!$D$2:$D$9)"
+        "+SUMIFS('[Source.xlsx]Data'!$E$2:$E$9,'[Source.xlsx]Data'!$F$2:$F$9,1)"
+    )
+
+    assert closed_external_criteria_function_calls(formula) == (
+        ("COUNTBLANK", 1),
+        ("COUNTIF", 1),
+        ("COUNTIFS", 2),
+        ("SUMIF", 2),
+        ("SUMIFS", 2),
+    )
+
+
+def test_closed_external_criteria_function_calls_keep_ambiguous_forms_quiet() -> None:
+    quiet_formulas = (
+        "=COUNTIF(A2:A9,1)",
+        "=COUNTIF('[Source.xlsx]Data'!A2:A9)",
+        "=COUNTIFS('[Source.xlsx]Data'!A2:A9,1,'[Source.xlsx]Data'!B2:B9)",
+        "=SUMIF('[Source.xlsx]Data'!A2:A9,1,,)",
+        "=SUMIFS('[Source.xlsx]Data'!A2:A9,'[Source.xlsx]Data'!B2:B9)",
+        "=COUNTIF(\"'[Source.xlsx]Data'!A2:A9\",1)",
+        "=COUNTIF([Source.xlsx]InputRange,1)",
+        "=COUNTIF([Source.xlsx]Jan:Mar!A2:A9,1)",
+        "=COUNTIF([Source.xlsx]Data!Sales[Amount],1)",
+        "=COUNTIF('[Source.xlsx]Data'!A2:A9,#REF!)",
+        "=Vendor.COUNTIF('[Source.xlsx]Data'!A2:A9,1)",
+        "=_xlfn.COUNTIFS('[Source.xlsx]Data'!A2:A9,1)",
+    )
+
+    for formula in quiet_formulas:
+        assert closed_external_criteria_function_calls(formula) == ()
 
 
 def test_direct_sum_argument_reference_groups_find_qualifying_native_calls() -> None:

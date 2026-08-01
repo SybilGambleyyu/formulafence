@@ -116,6 +116,14 @@ financial correctness or replace model review.
   workbook names, sheets, addresses, formulas, and cell values remain private.
   A saved `#VALUE!` stays independently reportable because the syntax cannot
   prove the source workbook's state at the prior calculation.
+  Its `FF115` saved null-intersection signal accepts only an exact,
+  well-formed private cached formula-result classification. It records the last
+  saved display state only: it does not calculate a formula, retain a formula or cache value,
+  diagnose a range-intersection cause, or infer that the current result is
+  unchanged. Missing, malformed, and other cached error kinds stay quiet. In
+  particular, it does not treat `#N/A` as equivalent because Excel documents
+  `NA()` as an intentional missing-data and chart-gap marker. Its evidence is
+  only the formula location and a saved-result scope.
   Its `MMULT` matrix-dimension signal accepts only the unqualified native
   spelling (optionally with `@`) with exactly two comma-separated arguments,
   each one bounded, internal direct A1 cell/range or whole-column reference.
@@ -221,8 +229,8 @@ financial correctness or replace model review.
   unsorted-direct-numeric-vector counts, XLOOKUP/XMATCH unsupported-literal-
   mode counts, direct-SUM overlapping-pair and qualifying-call counts,
   AGGREGATE literal-argument error-class, native-MOD zero-divisor-call, and
-  date-function unsupported-code error-class, and closed-external-workbook
-  criteria-function aggregate counts, direct-
+  date-function unsupported-code error-class, closed-external-workbook
+  criteria-function aggregate counts, saved-null-intersection result scopes, direct-
   or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-

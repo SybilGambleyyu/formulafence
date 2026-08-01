@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.217.0 — 2026-08-01
+
+- Add high-severity `FF115` to `formulafence lint`: it reports an exact,
+  well-formed stored formula-result cache whose private classification is a
+  null-intersection error. Microsoft documents this as a formula error caused
+  by non-intersecting range areas, distinct from the intentionally usable
+  missing-data `#N/A` state.
+- Keep the boundary private and observational: the rule does not calculate a
+  formula, expose a formula or cached value, diagnose the cause, or infer that
+  the current result is unchanged. Missing, malformed, and other saved cache
+  kinds stay quiet. JSON, Markdown, and SARIF retain only the affected location
+  and a saved-result scope.
+
 ## 0.216.1 — 2026-08-01
 
 - Correct the README and CI-guide quick-start snippets to point to the current

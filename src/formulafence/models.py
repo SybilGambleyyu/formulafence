@@ -3136,6 +3136,7 @@ class FormulaCachedResultEntry:
     is_divide_by_zero_error: bool = False
     is_numeric_error: bool = False
     is_name_error: bool = False
+    is_null_error: bool = False
     is_value_error: bool = False
 
     @property

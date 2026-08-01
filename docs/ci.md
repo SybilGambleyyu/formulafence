@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.216.1
+        uses: SybilGambleyyu/formulafence@v0.217.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -151,8 +151,9 @@ a direct literal zero. `FF106` is a high-severity formula whose saved result is
 a division-by-zero error. `FF107` is a high-severity formula whose saved result
 is a numeric error. `FF108` is a high-severity formula whose saved result is a
 name error. `FF109` is a high-severity formula whose saved result is a value
-error. `FF110` is a high-severity native `SUM` call whose direct static range
-arguments overlap, so at least one cell is included more than once. `FF111` is
+error. `FF115` is a high-severity formula whose saved result is a
+null-intersection error. `FF110` is a high-severity native `SUM` call whose
+direct static range arguments overlap, so at least one cell is included more than once. `FF111` is
 a high-severity native `AGGREGATE` call whose direct literal function number or
 option is outside its documented domain, or whose functions 14–19 omit the
 required second reference. `FF112` is a high-severity native `MOD` call whose
@@ -357,6 +358,12 @@ inspects a formula, retains no cached value, diagnoses no value-error cause,
 and does not infer that the current result is unchanged. Other saved error
 kinds, missing or malformed cache records, and locations already covered by
 `FF093` stay quiet. It emits only a location and saved-result scope.
+`FF115` accepts only a well-formed stored formula-result cache whose exact
+private error classification is a null-intersection error. It neither
+calculates nor inspects a formula, retains no cached value, diagnoses no error
+cause, and does not infer that the current result is unchanged. Other saved
+error kinds and missing or malformed cache records stay quiet. It emits only a
+location and saved-result scope.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -399,7 +406,8 @@ covered by `FF105` or `FF112`; `FF107` separately accepts an exact saved
 numeric error and
 skips a location already covered by `FF098`, `FF103`, or `FF113`; `FF108` separately
 accepts an exact saved name error; `FF109` separately accepts an exact saved
-value error and skips a location already covered by `FF093`. All five are
+value error and skips a location already covered by `FF093`; `FF115` separately
+accepts an exact saved null-intersection error. All six are
 last-saved display facts rather than proof of a current calculation result.
 Missing or malformed cache records stay quiet. Use `--fail-on medium` only when
 intentional exceptions have an established review path. The default
@@ -604,7 +612,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.216.1
+  uses: SybilGambleyyu/formulafence@v0.217.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -762,7 +770,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.216.1/formulafence-0.216.1-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.217.0/formulafence-0.217.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

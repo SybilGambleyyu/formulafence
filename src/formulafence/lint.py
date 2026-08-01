@@ -1794,6 +1794,28 @@ def _saved_name_error_result_locations(
     )
 
 
+def _saved_null_error_result_locations(
+    snapshot: WorkbookSnapshot,
+) -> tuple[CellKey, ...]:
+    """Return locations with a valid saved null-intersection formula result.
+
+    SpreadsheetML retains a formula's last calculated value beside its formula.
+    The private cache reader recognizes this exact error state without retaining
+    the cache value. This lint reports that saved display state; it does not
+    recalculate the formula or infer that the current result is unchanged.
+    """
+    return tuple(
+        sorted(
+            {
+                entry.location
+                for entry in snapshot.formula_cached_results.entries
+                if entry.is_null_error
+            },
+            key=_location_sort_key,
+        )
+    )
+
+
 def _saved_value_error_result_locations(
     snapshot: WorkbookSnapshot,
 ) -> tuple[CellKey, ...]:
@@ -1882,9 +1904,9 @@ def lint_snapshot(
     errors, direct and multi-cell static circular
     references while iteration is disabled, an explicit broken reference
     operand, and saved broken-reference, division-by-zero, or
-    numeric-error, name-error, or value-error results. It never evaluates
-    formulas, and rejects incomplete array metadata before claiming
-    ordinary-cell coverage.
+    numeric-error, name-error, null-intersection, or value-error results. It
+    never evaluates formulas, and rejects incomplete array metadata before
+    claiming ordinary-cell coverage.
     """
     if max_formula_pattern_findings < 1:
         raise FormulaFenceError("max_formula_pattern_findings must be at least 1.")
@@ -3031,6 +3053,21 @@ def lint_snapshot(
                 rule_id="FF108",
                 severity="high",
                 message="A formula's saved result is a name error.",
+                location=location,
+                details={"evidence_scope": "saved_formula_result"},
+            )
+        )
+    for location in _saved_null_error_result_locations(snapshot):
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF115",
+                severity="high",
+                message="A formula's saved result is a null-intersection error.",
                 location=location,
                 details={"evidence_scope": "saved_formula_result"},
             )

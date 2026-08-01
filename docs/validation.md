@@ -5,6 +5,46 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Saved null-intersection formula-result lint — 2026-08-01
+
+Microsoft's [formula-error guidance](https://support.microsoft.com/en-us/excel/detect-formula-errors-in-excel)
+identifies `#NULL!` as a formula error and explains that an intersection of
+non-overlapping areas produces it. Its dedicated [null-error guidance](https://support.microsoft.com/en-au/office/correct-a-null-error-11a15515-5df3-4a82-899e-e4c0070ea9c4)
+likewise attributes the error to an invalid range operator or an intersection
+of ranges that do not cross. `FF115` therefore reports only an exact,
+well-formed stored formula-result cache with that private error classification.
+It records the prior saved display state only: it does not calculate a formula,
+retain a cached value, inspect formula text, diagnose a cause, or infer that a
+current result is unchanged. Missing, malformed, and other saved error kinds
+remain quiet.
+
+The boundary deliberately does not add a generic saved `#N/A` rule. Microsoft
+documents the [intentional use of `NA()` for chart gaps](https://support.microsoft.com/en-us/excel/a-line-chart-may-plot-gaps-in-lines-when-the-data-range-contains-blank-cells-in-excel),
+so `#N/A` is not interchangeable with a null-intersection error. Focused lint,
+CLI, and renderer coverage exercises a cache-only null-intersection result,
+high-severity gating, and JSON/Markdown/SARIF redaction; it also verifies that
+the formula text and cached error spelling never leave FormulaFence output.
+
+An aggregate-only raw cache census kept every formula and cached value private.
+Across 5,464 public SpreadsheetBench artifacts it saw 1,264,371 formula cells,
+31,119 stored formula-error cells, and zero saved null-intersection results.
+Across a separate 469-artifact public-code corpus it safely loaded 463
+artifacts, saw 60,866 formula cells and 1,322 stored formula-error cells, and
+found two saved null-intersection results. A two-stage production replay then
+scanned all 5,933 artifacts across both corpora, rejected six malformed archive
+artifacts during raw selection, selected two candidate workbooks with two
+candidate entries, loaded and linted both with zero rejections, and emitted two
+`FF115` findings. This proves the implemented reader/linter path on real saved
+state, not a causal diagnosis or a claim that the saved result is current. Both
+probes emitted aggregate counters only: no workbook path, sheet, coordinate,
+formula, range, or cached value was retained or printed.
+
+The release-versioned 0.217.0 source tree passed **1,545 tests in 106.09
+seconds**. `git diff --check`, `ruff check .`, and `python -m compileall -q src
+tests` also completed cleanly. The built wheel and source distribution passed
+`twine check`, then each installed into a fresh environment with the declared
+dependencies and reported the expected FormulaFence version.
+
 ## Closed-external-workbook criteria-function lint — 2026-08-01
 
 Microsoft's [COUNTIF/COUNTIFS `#VALUE!` guidance](https://support.microsoft.com/en-us/excel/how-to-correct-a-value-error-in-the-countif-countifs-function)

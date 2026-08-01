@@ -6933,6 +6933,18 @@ def lint_to_markdown(
                 "- {location}: the stored formula-result cache records a null-intersection "
                 "error.".format(location=_markdown_code(location or "workbook"))
             )
+    saved_dynamic_array_spill_error_evidence = [
+        finding["location"]
+        for finding in payload["findings"]
+        if finding["rule_id"] == "FF116"
+    ]
+    if saved_dynamic_array_spill_error_evidence:
+        lines.extend(["## Saved dynamic-array spill evidence", ""])
+        for location in saved_dynamic_array_spill_error_evidence:
+            lines.append(
+                "- {location}: the stored formula-result cache records a dynamic-array "
+                "spill error.".format(location=_markdown_code(location or "workbook"))
+            )
     saved_value_error_evidence = [
         finding["location"]
         for finding in payload["findings"]
@@ -7038,6 +7050,7 @@ def lint_to_sarif(report: FormulaLintReport) -> dict[str, Any]:
             "#VALUE! if its source workbook is closed."
         ),
         "FF115": "A formula's saved result is a null-intersection error.",
+        "FF116": "A dynamic-array formula's saved result is a spill error.",
     }
     rule_ids = sorted({finding.rule_id for finding in report.findings})
     rules = [

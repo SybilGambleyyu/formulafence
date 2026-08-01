@@ -124,6 +124,16 @@ financial correctness or replace model review.
   particular, it does not treat `#N/A` as equivalent because Excel documents
   `NA()` as an intentional missing-data and chart-gap marker. Its evidence is
   only the formula location and a saved-result scope.
+  Its `FF116` saved dynamic-array-spill signal accepts only the complete
+  Office-compatible encoding: one well-formed array formula with a typed saved
+  value-error cache, a verified dynamic-array cell-metadata index, a verified
+  rich-value value-metadata index, and the canonical workbook metadata
+  relationship and content-type declaration. It does not calculate a formula,
+  retain formula, cache, or metadata content, diagnose a blocker or other spill
+  cause, or infer that the current result is unchanged. Missing, partial,
+  malformed, or ordinary value-error records remain outside this signal (and
+  can remain eligible for `FF109`). Its evidence is only the formula location
+  and a saved-result scope.
   Its `MMULT` matrix-dimension signal accepts only the unqualified native
   spelling (optionally with `@`) with exactly two comma-separated arguments,
   each one bounded, internal direct A1 cell/range or whole-column reference.
@@ -230,7 +240,8 @@ financial correctness or replace model review.
   mode counts, direct-SUM overlapping-pair and qualifying-call counts,
   AGGREGATE literal-argument error-class, native-MOD zero-divisor-call, and
   date-function unsupported-code error-class, closed-external-workbook
-  criteria-function aggregate counts, saved-null-intersection result scopes, direct-
+  criteria-function aggregate counts, saved-null-intersection and
+  saved-dynamic-array-spill result scopes, direct-
   or multi-cell-
   static scope, and a multi-cell component size, never formula text, cell
   values, cached results, ignored-error target ranges, direct conditional-

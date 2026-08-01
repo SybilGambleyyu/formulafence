@@ -20,8 +20,12 @@ from formulafence.workbook import load_snapshot
 
 from .helpers import (
     make_calculated_column_model,
+    make_dynamic_array_spill_cached_result_model,
     make_formula_cached_result_model,
     make_ignored_error_model,
+    remove_dynamic_array_spill_content_type_declaration,
+    remove_dynamic_array_spill_metadata_declaration,
+    remove_dynamic_array_spill_value_metadata,
 )
 
 
@@ -2902,6 +2906,54 @@ def test_lint_reports_a_saved_null_intersection_error_formula_result(
     assert report.findings[0].details == {"evidence_scope": "saved_formula_result"}
 
 
+def test_lint_reports_a_verified_saved_dynamic_array_spill_result(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_dynamic_array_spill_cached_result_model(
+            tmp_path / "saved-dynamic-array-spill.xlsx"
+        )
+    )
+
+    report = lint_snapshot(snapshot)
+
+    assert [
+        (finding.rule_id, finding.severity, finding.location)
+        for finding in report.findings
+    ] == [("FF116", "high", ("Report", "B5"))]
+    assert report.findings[0].details == {"evidence_scope": "saved_formula_result"}
+
+
+def test_lint_requires_the_complete_saved_dynamic_array_spill_marker(
+    tmp_path: Path,
+) -> None:
+    missing_value_metadata = make_dynamic_array_spill_cached_result_model(
+        tmp_path / "saved-dynamic-array-spill-no-vm.xlsx"
+    )
+    missing_metadata_declaration = make_dynamic_array_spill_cached_result_model(
+        tmp_path / "saved-dynamic-array-spill-no-relationship.xlsx"
+    )
+    missing_content_type_declaration = make_dynamic_array_spill_cached_result_model(
+        tmp_path / "saved-dynamic-array-spill-no-content-type.xlsx"
+    )
+    remove_dynamic_array_spill_value_metadata(missing_value_metadata)
+    remove_dynamic_array_spill_metadata_declaration(missing_metadata_declaration)
+    remove_dynamic_array_spill_content_type_declaration(
+        missing_content_type_declaration
+    )
+
+    for workbook in (
+        missing_value_metadata,
+        missing_metadata_declaration,
+        missing_content_type_declaration,
+    ):
+        report = lint_snapshot(load_snapshot(workbook))
+        assert [
+            (finding.rule_id, finding.severity, finding.location)
+            for finding in report.findings
+        ] == [("FF109", "high", ("Report", "B5"))]
+
+
 def test_lint_keeps_other_saved_errors_quiet_and_avoids_static_duplicates(
     tmp_path: Path,
 ) -> None:
@@ -3691,6 +3743,45 @@ def test_lint_saved_null_intersection_error_renderers_keep_cache_data_out(
             "name": "FF115",
             "shortDescription": {
                 "text": "A formula's saved result is a null-intersection error."
+            },
+        }
+    ]
+
+
+def test_lint_saved_dynamic_array_spill_renderers_keep_cache_data_out(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_snapshot(
+        make_dynamic_array_spill_cached_result_model(
+            tmp_path / "saved-dynamic-array-spill.xlsx",
+            error_formula='=UNIQUE(Inputs!A1:A3)+N("PRIVATE-SPILL-FORMULA")',
+        )
+    )
+    report = lint_snapshot(snapshot)
+
+    rendered_json = as_json(report.to_dict())
+    rendered_markdown = lint_to_markdown(report)
+    rendered_sarif = lint_to_sarif(report)
+
+    for rendered in (rendered_json, rendered_markdown, str(rendered_sarif)):
+        assert "PRIVATE-SPILL-FORMULA" not in rendered
+        assert "#VALUE!" not in rendered
+        assert "#SPILL!" not in rendered
+        assert "XLRICHVALUE" not in rendered
+        assert "FF116" in rendered
+    assert "## Saved dynamic-array spill evidence" in rendered_markdown
+    result = rendered_sarif["runs"][0]["results"][0]
+    assert result["locations"][0]["logicalLocations"][0]["name"] == "Report!B5"
+    assert result["properties"] == {
+        "severity": "high",
+        "evidence_scope": "saved_formula_result",
+    }
+    assert rendered_sarif["runs"][0]["tool"]["driver"]["rules"] == [
+        {
+            "id": "FF116",
+            "name": "FF116",
+            "shortDescription": {
+                "text": "A dynamic-array formula's saved result is a spill error."
             },
         }
     ]

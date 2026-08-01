@@ -5,6 +5,59 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Saved dynamic-array spill-result lint — 2026-08-01
+
+Microsoft's [dynamic-array spill guidance](https://support.microsoft.com/en-us/office/dynamic-array-formulas-and-spilled-array-behavior-205c6b06-03ba-4b05-a35f-5c69b7c6ed13)
+and [`#SPILL!` troubleshooting](https://support.microsoft.com/en-us/office/-spill-error-out-of-memory-50e613d0-498a-4cd8-96ee-0846af48f411)
+describe an output that cannot spill into the worksheet grid, while also making
+clear that a blocker is only one possible cause. FormulaFence therefore records
+the stored display state and does not diagnose why the spill could not occur.
+
+The compatibility serialization is not a naïve literal `#SPILL!` error cell.
+Microsoft's [SpreadsheetML metadata specification](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/3dd44d53-847b-402f-a8c7-41a85024caf7)
+names both the `XLDAPR` dynamic-array properties and the `XLRICHVALUE`
+rich-value binding used by the encoding. LibreOffice's
+[round-trip implementation](https://github.com/LibreOffice/core/blob/34da3a171c57b88a734d691c9030d7f707c57bff/sc/source/filter/oox/sheetdatacontext.cxx)
+documents its compatible representation as a typed saved `#VALUE!` cache plus
+dynamic-array metadata, and PhpSpreadsheet's
+[XLSX writer](https://github.com/PHPOffice/PhpSpreadsheet/blob/9ef98dfe8f9a5a2fd9a6feaaded47ef6806bbb79/src/PhpSpreadsheet/Writer/Xlsx/Worksheet.php)
+emits the same compatibility form with a rich-value metadata reference.
+
+`FF116` consequently accepts only the full private marker: exactly one
+nonempty array formula and one typed saved `#VALUE!` result, a positive cell
+metadata index resolving to a dynamic-array property, a positive value-metadata
+index resolving to an `XLRICHVALUE` binding, and the canonical `xl/metadata.xml`
+workbook relationship plus content-type declaration. It does not calculate the
+formula, inspect its text, retain a cached error or metadata value, infer a
+blocker, spill extent, or present state, or treat a raw literal `#SPILL!` string
+as evidence. An incomplete marker remains an ordinary `FF109` saved value-error
+observation rather than a spill finding, and `FF116` suppresses a duplicate
+`FF109` only for the complete encoding.
+
+An aggregate-only raw OOXML census across 5,458 public SpreadsheetBench `.xlsx`
+artifacts found 809 workbooks with dynamic-array metadata, 49,894 dynamic-array
+anchors, and 234 saved formula errors on those anchors. Seventy-three were
+typed saved `#VALUE!` errors; 63 had the complete positive rich-value metadata
+reference, while 10 did not, and zero used a typed literal `#SPILL!` cache.
+A production replay selected the three workbooks containing the 63 complete
+markers, loaded and linted all three through FormulaFence, emitted 63 `FF116`
+findings and zero duplicate `FF109` findings, and emitted no rich-data coverage
+warning. The census and replay printed aggregate counters only: no workbook
+path, sheet, coordinate, formula, cached value, or metadata payload was
+retained or printed.
+
+Focused fixtures cover the complete marker, an omitted value-metadata cell
+marker, omitted workbook metadata relationship and content-type declarations,
+high-severity CLI gating, and JSON/Markdown/SARIF redaction. They also verify
+that a complete spill marker without rich-data package parts is not
+misclassified as rich data, while a real rich-data package with a conventional
+`xl/richData/` ZIP directory entry still retains its ordinary rich-data
+inspection.
+
+The release-versioned 0.218.0 source tree passed **1,551 tests in 107.26
+seconds**. `git diff --check`, `ruff check .`, and `python -m compileall -q src
+tests` also completed cleanly before packaging.
+
 ## Saved null-intersection formula-result lint — 2026-08-01
 
 Microsoft's [formula-error guidance](https://support.microsoft.com/en-us/excel/detect-formula-errors-in-excel)

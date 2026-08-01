@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.218.0 — 2026-08-01
+
+- Add high-severity `FF116` to `formulafence lint`: it reports a saved
+  dynamic-array spill error only when a well-formed array formula has the
+  Office-compatible value-error cache plus verified dynamic-array and
+  rich-value metadata, including the canonical workbook relationship and
+  content-type declaration.
+- Keep the boundary private and observational: the rule does not calculate a
+  formula, expose a formula, cache value, or metadata record, infer a blocker,
+  or claim that the current result is unchanged. Partial, malformed, or
+  ordinary saved value-error records remain `FF109`; `FF116` takes precedence
+  only for the complete encoding. JSON, Markdown, and SARIF retain only the
+  affected location and a saved-result scope.
+- Recognize empty `xl/richData/` ZIP directory markers as directories rather
+  than unsupported rich-data parts, eliminating false coverage warnings while
+  preserving inspection of the actual rich-data package members.
+
 ## 0.217.0 — 2026-08-01
 
 - Add high-severity `FF115` to `formulafence lint`: it reports an exact,

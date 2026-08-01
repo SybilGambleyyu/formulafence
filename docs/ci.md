@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: '3.12'
       - id: formulafence
-        uses: SybilGambleyyu/formulafence@v0.217.0
+        uses: SybilGambleyyu/formulafence@v0.218.0
         with:
           baseline: models/approved/model.xlsx
           candidate: build/model.xlsx
@@ -152,7 +152,8 @@ a division-by-zero error. `FF107` is a high-severity formula whose saved result
 is a numeric error. `FF108` is a high-severity formula whose saved result is a
 name error. `FF109` is a high-severity formula whose saved result is a value
 error. `FF115` is a high-severity formula whose saved result is a
-null-intersection error. `FF110` is a high-severity native `SUM` call whose
+null-intersection error. `FF116` is a high-severity dynamic-array formula
+whose saved result is a spill error. `FF110` is a high-severity native `SUM` call whose
 direct static range arguments overlap, so at least one cell is included more than once. `FF111` is
 a high-severity native `AGGREGATE` call whose direct literal function number or
 option is outside its documented domain, or whose functions 14–19 omit the
@@ -332,7 +333,8 @@ medium-severity finding describes the documented closed-source-workbook risk,
 not a proven current error. It emits only aggregate function, cell, and
 external-reference-argument counts—never a workbook path, sheet, address,
 formula, or cell value. A same-cell saved `#VALUE!` remains independently
-reportable as `FF109`.
+reportable as `FF109` unless it has the complete verified dynamic-array spill
+encoding for `FF116`.
 `FF106` accepts only a well-formed stored formula-result cache whose exact
 private error classification is division by zero. It neither calculates nor
 inspects a formula, retains no cached value, and does not infer that the
@@ -357,13 +359,23 @@ private error classification is a value error. It neither calculates nor
 inspects a formula, retains no cached value, diagnoses no value-error cause,
 and does not infer that the current result is unchanged. Other saved error
 kinds, missing or malformed cache records, and locations already covered by
-`FF093` stay quiet. It emits only a location and saved-result scope.
+`FF093` or `FF116` stay quiet. It emits only a location and saved-result
+scope.
 `FF115` accepts only a well-formed stored formula-result cache whose exact
 private error classification is a null-intersection error. It neither
 calculates nor inspects a formula, retains no cached value, diagnoses no error
 cause, and does not infer that the current result is unchanged. Other saved
 error kinds and missing or malformed cache records stay quiet. It emits only a
 location and saved-result scope.
+`FF116` accepts only a well-formed array formula whose typed saved value-error
+cache is accompanied by a verified dynamic-array cell-metadata index, a
+verified rich-value value-metadata index, and the canonical workbook metadata
+relationship and content-type declaration. It neither calculates nor inspects
+the formula, retains no cache value or metadata record, diagnoses no blocker or
+other spill cause, and does not infer that the current result is unchanged.
+Partial, malformed, or ordinary value-error records stay quiet for this rule
+and remain eligible for `FF109`. It emits only a location and saved-result
+scope.
 `FF090` accepts only a component of at least two
 eligible ordinary formula cells connected by resolved scalar static
 dependencies; it never expands ranges or evaluates a workbook. Both stay quiet
@@ -407,8 +419,9 @@ numeric error and
 skips a location already covered by `FF098`, `FF103`, or `FF113`; `FF108` separately
 accepts an exact saved name error; `FF109` separately accepts an exact saved
 value error and skips a location already covered by `FF093`; `FF115` separately
-accepts an exact saved null-intersection error. All six are
-last-saved display facts rather than proof of a current calculation result.
+accepts an exact saved null-intersection error; `FF116` separately accepts a
+verified saved dynamic-array spill encoding, and `FF109` skips it. All seven
+are last-saved display facts rather than proof of a current calculation result.
 Missing or malformed cache records stay quiet. Use `--fail-on medium` only when
 intentional exceptions have an established review path. The default
 10,000-finding cap is fail closed; adjust it only with an explicit positive
@@ -612,7 +625,7 @@ per workbook in the consolidated artifact.
 
 ```yaml
 - id: formulafence-portfolio
-  uses: SybilGambleyyu/formulafence@v0.217.0
+  uses: SybilGambleyyu/formulafence@v0.218.0
   with:
     baseline: models/approved
     candidate: build/models
@@ -770,7 +783,7 @@ jobs:
           python-version: '3.12'
       - run: >-
           python -m pip install
-          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.217.0/formulafence-0.217.0-py3-none-any.whl
+          https://github.com/SybilGambleyyu/formulafence/releases/download/v0.218.0/formulafence-0.218.0-py3-none-any.whl
       - run: >-
           formulafence check
           models/approved/model.xlsx

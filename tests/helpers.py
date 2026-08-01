@@ -6,7 +6,7 @@ import struct
 from collections.abc import Callable
 from pathlib import Path
 from xml.etree import ElementTree
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.chart import BarChart, Reference
@@ -3385,6 +3385,23 @@ def make_rich_data_model(path: Path) -> Path:
         contents["[Content_Types].xml"] = serialize(content_types)
 
     return _rewrite_archive(path, mutate, ".rich-data-model.tmp.xlsx")
+
+
+def add_rich_data_directory_marker(path: Path) -> Path:
+    """Add a conventional ZIP directory entry without changing rich-data parts."""
+    with ZipFile(path) as source:
+        contents = {
+            entry.filename: source.read(entry.filename) for entry in source.infolist()
+        }
+    staging = path.with_suffix(".rich-data-directory-marker.tmp.xlsx")
+    with ZipFile(staging, "w", compression=ZIP_DEFLATED) as archive:
+        for name, content in contents.items():
+            archive.writestr(name, content)
+        marker = ZipInfo("xl/richData/")
+        marker.compress_type = ZIP_STORED
+        archive.writestr(marker, b"")
+    staging.replace(path)
+    return path
 
 
 def change_rich_data_value(path: Path) -> Path:
@@ -15653,6 +15670,267 @@ def make_formula_cached_result_model(
         )
 
     return _rewrite_archive(path, mutate, ".formula-cached-result.tmp.xlsx")
+
+
+def make_dynamic_array_spill_cached_result_model(
+    path: Path,
+    *,
+    error_formula: str = "=UNIQUE(Inputs!A1:A3)",
+) -> Path:
+    """Create a private OOXML-compatible saved dynamic-array spill fixture.
+
+    Excel-compatible writers can represent a blocked dynamic array as a typed
+    value-error cache together with dynamic-array cell metadata and an
+    ``XLRICHVALUE`` value-metadata marker.  The fixture deliberately contains
+    no rich-data package parts: that marker is compatibility metadata, not an
+    entity value.
+    """
+    make_formula_cached_result_model(
+        path,
+        error_formula=error_formula,
+        error_result="#VALUE!",
+    )
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+        formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
+        metadata_tag = f"{{{_SPREADSHEETML_NS}}}metadata"
+        metadata_types_tag = f"{{{_SPREADSHEETML_NS}}}metadataTypes"
+        metadata_type_tag = f"{{{_SPREADSHEETML_NS}}}metadataType"
+        future_metadata_tag = f"{{{_SPREADSHEETML_NS}}}futureMetadata"
+        block_tag = f"{{{_SPREADSHEETML_NS}}}bk"
+        extension_list_tag = f"{{{_SPREADSHEETML_NS}}}extLst"
+        extension_tag = f"{{{_SPREADSHEETML_NS}}}ext"
+        cell_metadata_tag = f"{{{_SPREADSHEETML_NS}}}cellMetadata"
+        value_metadata_tag = f"{{{_SPREADSHEETML_NS}}}valueMetadata"
+        record_tag = f"{{{_SPREADSHEETML_NS}}}rc"
+        dynamic_properties_tag = (
+            "{http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray}"
+            "dynamicArrayProperties"
+        )
+        rich_value_binding_tag = f"{{{_RICH_DATA_NS}}}rvb"
+
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        spill_cell = next(
+            (
+                cell
+                for cell in worksheet.iter(cell_tag)
+                if cell.get("r") == "B5"
+            ),
+            None,
+        )
+        if spill_cell is None:
+            raise ValueError("Formula-cache fixture does not contain the spill anchor")
+        formula = spill_cell.find(formula_tag)
+        if formula is None:
+            raise ValueError("Formula-cache fixture does not contain the spill formula")
+        spill_cell.set("t", "e")
+        spill_cell.set("cm", "1")
+        spill_cell.set("vm", "1")
+        formula.set("t", "array")
+        formula.set("ref", "B5")
+        formula.set("aca", "1")
+        formula.set("ca", "1")
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        metadata = ElementTree.Element(metadata_tag)
+        metadata_types = ElementTree.SubElement(
+            metadata,
+            metadata_types_tag,
+            {"count": "2"},
+        )
+        ElementTree.SubElement(
+            metadata_types,
+            metadata_type_tag,
+            {"name": "XLDAPR", "cellMeta": "1"},
+        )
+        ElementTree.SubElement(
+            metadata_types,
+            metadata_type_tag,
+            {"name": "XLRICHVALUE"},
+        )
+
+        dynamic_future_metadata = ElementTree.SubElement(
+            metadata,
+            future_metadata_tag,
+            {"name": "XLDAPR", "count": "1"},
+        )
+        dynamic_block = ElementTree.SubElement(dynamic_future_metadata, block_tag)
+        dynamic_extensions = ElementTree.SubElement(dynamic_block, extension_list_tag)
+        dynamic_extension = ElementTree.SubElement(
+            dynamic_extensions,
+            extension_tag,
+            {"uri": "{BDBB8CDC-FA1E-496E-A857-3C3F30C029C3}"},
+        )
+        ElementTree.SubElement(
+            dynamic_extension,
+            dynamic_properties_tag,
+            {"fDynamic": "1", "fCollapsed": "0"},
+        )
+
+        rich_future_metadata = ElementTree.SubElement(
+            metadata,
+            future_metadata_tag,
+            {"name": "XLRICHVALUE", "count": "1"},
+        )
+        rich_block = ElementTree.SubElement(rich_future_metadata, block_tag)
+        rich_extensions = ElementTree.SubElement(rich_block, extension_list_tag)
+        rich_extension = ElementTree.SubElement(
+            rich_extensions,
+            extension_tag,
+            {"uri": _RICH_DATA_METADATA_EXTENSION_URI},
+        )
+        ElementTree.SubElement(rich_extension, rich_value_binding_tag, {"i": "0"})
+
+        cell_metadata = ElementTree.SubElement(
+            metadata,
+            cell_metadata_tag,
+            {"count": "1"},
+        )
+        cell_metadata_block = ElementTree.SubElement(cell_metadata, block_tag)
+        ElementTree.SubElement(
+            cell_metadata_block,
+            record_tag,
+            {"t": "1", "v": "0"},
+        )
+        value_metadata = ElementTree.SubElement(
+            metadata,
+            value_metadata_tag,
+            {"count": "1"},
+        )
+        value_metadata_block = ElementTree.SubElement(value_metadata, block_tag)
+        ElementTree.SubElement(
+            value_metadata_block,
+            record_tag,
+            {"t": "2", "v": "0"},
+        )
+        contents["xl/metadata.xml"] = ElementTree.tostring(
+            metadata,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        ElementTree.SubElement(
+            content_types,
+            f"{{{_CONTENT_TYPES_NS}}}Override",
+            {
+                "PartName": "/xl/metadata.xml",
+                "ContentType": (
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheetMetadata+xml"
+                ),
+            },
+        )
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        ElementTree.SubElement(
+            relationships,
+            f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship",
+            {
+                "Id": "rIdFormulaFenceDynamicArraySpillMetadata",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/sheetMetadata",
+                "Target": "metadata.xml",
+            },
+        )
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".dynamic-array-spill.tmp.xlsx")
+
+
+def remove_dynamic_array_spill_value_metadata(path: Path) -> Path:
+    """Remove the private value-metadata cell marker from a spill fixture."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        worksheet = ElementTree.fromstring(contents["xl/worksheets/sheet2.xml"])
+        spill_cell = next(
+            (
+                cell
+                for cell in worksheet.iter(f"{{{_SPREADSHEETML_NS}}}c")
+                if cell.get("r") == "B5"
+            ),
+            None,
+        )
+        if spill_cell is None:
+            raise ValueError("Spill fixture does not contain the spill anchor")
+        spill_cell.attrib.pop("vm", None)
+        contents["xl/worksheets/sheet2.xml"] = ElementTree.tostring(
+            worksheet,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".dynamic-array-spill-no-vm.tmp.xlsx")
+
+
+def remove_dynamic_array_spill_metadata_declaration(path: Path) -> Path:
+    """Remove the canonical metadata relationship from a spill fixture."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        relationships = ElementTree.fromstring(
+            contents["xl/_rels/workbook.xml.rels"]
+        )
+        relationship = next(
+            (
+                candidate
+                for candidate in relationships.findall(relationship_tag)
+                if candidate.get("Type", "").casefold().endswith("/sheetmetadata")
+                and candidate.get("Target") == "metadata.xml"
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Spill fixture does not contain the metadata relationship")
+        relationships.remove(relationship)
+        contents["xl/_rels/workbook.xml.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".dynamic-array-spill-no-rels.tmp.xlsx")
+
+
+def remove_dynamic_array_spill_content_type_declaration(path: Path) -> Path:
+    """Remove the canonical metadata content-type declaration from a fixture."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        declaration = next(
+            (
+                candidate
+                for candidate in content_types.findall(override_tag)
+                if candidate.get("PartName") == "/xl/metadata.xml"
+            ),
+            None,
+        )
+        if declaration is None:
+            raise ValueError("Spill fixture does not contain the metadata content type")
+        content_types.remove(declaration)
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".dynamic-array-spill-no-content-type.tmp.xlsx")
 
 
 def change_formula_cached_result(path: Path) -> Path:

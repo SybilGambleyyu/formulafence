@@ -70,6 +70,7 @@ from .helpers import (
     add_power_pivot_data_model_direct_relationship,
     add_protected_range,
     add_python_in_excel_scripts_compatibility_part,
+    add_rich_data_directory_marker,
     add_unsupported_extended_chart_relationship,
     add_worksheet_dimension_baseline_adjustments,
     add_worksheet_smartart_component_relationship,
@@ -312,6 +313,7 @@ from .helpers import (
     make_custom_workbook_view_model,
     make_data_validation_model,
     make_digital_signature_model,
+    make_dynamic_array_spill_cached_result_model,
     make_empty_chart_sheet_custom_view_container_model,
     make_extended_chart_definition_model,
     make_external_data_refresh_model,
@@ -16978,6 +16980,24 @@ def test_formula_cached_result_malformed_metadata_fails_closed(tmp_path) -> None
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 
 
+def test_saved_dynamic_array_spill_metadata_is_not_misclassified_as_rich_data(
+    tmp_path,
+) -> None:
+    snapshot = load_snapshot(
+        make_dynamic_array_spill_cached_result_model(
+            tmp_path / "saved-dynamic-array-spill.xlsx"
+        )
+    )
+
+    assert any(
+        entry.location == ("Report", "B5") and entry.is_dynamic_array_spill_error
+        for entry in snapshot.formula_cached_results.entries
+    )
+    assert snapshot.rich_data.present is False
+    assert snapshot.rich_data.unrecognized_rich_data_count == 0
+    assert not any("rich-data" in warning for warning in snapshot.parser_warnings)
+
+
 def test_rich_text_run_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
     baseline = make_rich_text_run_model(tmp_path / "baseline.xlsx")
     candidate = make_rich_text_run_model(tmp_path / "candidate.xlsx")
@@ -18091,6 +18111,17 @@ def test_rich_data_controls_are_profiled_diffed_and_redacted(tmp_path) -> None:
         "B2",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_rich_data_zip_directory_marker_is_not_an_unrecognized_part(tmp_path) -> None:
+    workbook = make_rich_data_model(tmp_path / "rich-data-directory-marker.xlsx")
+    add_rich_data_directory_marker(workbook)
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.rich_data.present is True
+    assert snapshot.rich_data.unrecognized_rich_data_count == 0
+    assert not any("rich-data" in warning for warning in snapshot.parser_warnings)
 
 
 def test_malformed_rich_data_metadata_fails_closed_and_is_redacted(tmp_path) -> None:

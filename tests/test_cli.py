@@ -46,6 +46,7 @@ from .helpers import (
     change_worksheet_code_resource_registration_call,
     change_worksheet_code_resource_registration_input,
     make_calculated_column_model,
+    make_dynamic_array_spill_cached_result_model,
     make_formula_cached_result_model,
     make_formula_dde_link_model,
     make_formula_defined_xlm_action_model,
@@ -589,6 +590,15 @@ def test_lint_saved_null_intersection_error_result_is_high(tmp_path) -> None:
         tmp_path / "saved-null-intersection-error.xlsx",
         error_formula='=CELL("address",(Inputs!A1:A1 Inputs!C1:C1))',
         error_result="#NULL!",
+    )
+
+    assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0
+    assert main(["lint", str(workbook_path), "--fail-on", "high"]) == 1
+
+
+def test_lint_saved_dynamic_array_spill_result_is_high(tmp_path) -> None:
+    workbook_path = make_dynamic_array_spill_cached_result_model(
+        tmp_path / "saved-dynamic-array-spill.xlsx"
     )
 
     assert main(["lint", str(workbook_path), "--fail-on", "critical"]) == 0

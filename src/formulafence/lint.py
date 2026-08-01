@@ -1838,6 +1838,28 @@ def _saved_value_error_result_locations(
     )
 
 
+def _saved_dynamic_array_spill_error_result_locations(
+    snapshot: WorkbookSnapshot,
+) -> tuple[CellKey, ...]:
+    """Return locations with a verified saved dynamic-array spill error.
+
+    Excel-compatible files can persist a dynamic-array spill as a value-error
+    cache plus dynamic-array and rich-value metadata.  The private cache reader
+    accepts the complete encoding only; this lint reports that saved display
+    state without recalculating the formula or diagnosing its current cause.
+    """
+    return tuple(
+        sorted(
+            {
+                entry.location
+                for entry in snapshot.formula_cached_results.entries
+                if entry.is_dynamic_array_spill_error
+            },
+            key=_location_sort_key,
+        )
+    )
+
+
 def _candidate_message(kind: str) -> tuple[str, str, str]:
     """Return the rule, severity, and reviewer-facing message for a pattern kind."""
     if kind == "blank_gap":
@@ -3072,11 +3094,35 @@ def lint_snapshot(
                 details={"evidence_scope": "saved_formula_result"},
             )
         )
+    saved_dynamic_array_spill_error_locations = (
+        _saved_dynamic_array_spill_error_result_locations(snapshot)
+    )
+    saved_dynamic_array_spill_error_location_set = set(
+        saved_dynamic_array_spill_error_locations
+    )
+    for location in saved_dynamic_array_spill_error_locations:
+        if len(findings) >= max_formula_pattern_findings:
+            raise FormulaFenceError(
+                "Formula lint exceeds "
+                f"max_formula_pattern_findings={max_formula_pattern_findings}."
+            )
+        findings.append(
+            Finding(
+                rule_id="FF116",
+                severity="high",
+                message="A dynamic-array formula's saved result is a spill error.",
+                location=location,
+                details={"evidence_scope": "saved_formula_result"},
+            )
+        )
     static_value_error_location_set = {
         location for location, _, _ in conditional_aggregate_candidates
     }
     for location in _saved_value_error_result_locations(snapshot):
-        if location in static_value_error_location_set:
+        if (
+            location in static_value_error_location_set
+            or location in saved_dynamic_array_spill_error_location_set
+        ):
             continue
         if len(findings) >= max_formula_pattern_findings:
             raise FormulaFenceError(

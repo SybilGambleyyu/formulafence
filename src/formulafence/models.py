@@ -3138,6 +3138,7 @@ class FormulaCachedResultEntry:
     is_name_error: bool = False
     is_null_error: bool = False
     is_value_error: bool = False
+    is_dynamic_array_spill_error: bool = False
 
     @property
     def location(self) -> CellKey:

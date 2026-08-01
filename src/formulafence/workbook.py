@@ -763,6 +763,10 @@ _RICH_DATA_MAX_XML_ELEMENT_COUNT = 32_768
 _RICH_DATA_TOTAL_XML_MAX_ELEMENT_COUNT = 2 * _RICH_DATA_MAX_XML_ELEMENT_COUNT
 _DYNAMIC_ARRAY_METADATA_MAX_XML_PART_BYTES = 16 * 1024 * 1024
 _DYNAMIC_ARRAY_METADATA_MAX_XML_ELEMENT_COUNT = 32_768
+_SHEET_METADATA_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument."
+    "spreadsheetml.sheetmetadata+xml"
+)
 _RICH_DATA_METADATA_TYPE_NAME = "XLRICHVALUE"
 _RICH_DATA_METADATA_EXTENSION_URI = "{3E2802C4-A4D2-4D8B-9148-E3BE6C30E623}"
 _RICH_DATA_PART_CONTENT_TYPES = {
@@ -34077,6 +34081,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
 
     try:
         with ZipFile(path) as archive:
+            spill_metadata: _DynamicArraySpillMetadataInspection | None = None
             cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
             formula_tag = f"{{{_SPREADSHEETML_NS}}}f"
             value_tag = f"{{{_SPREADSHEETML_NS}}}v"
@@ -34139,6 +34144,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                     is_name_error = False
                     is_null_error = False
                     is_value_error = False
+                    is_dynamic_array_spill_error = False
                     value_is_blank = (
                         value_element is None
                         or value_element.text is None
@@ -34196,6 +34202,32 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                             "missing" if value_element is None else value_element.text or ""
                         )
 
+                    potential_dynamic_array_spill_error = bool(
+                        not issues
+                        and formula_type == "array"
+                        and isinstance(formula.text, str)
+                        and bool(formula.text.strip())
+                        and cell_type == "e"
+                        and result_value.casefold() == "#value!"
+                    )
+                    if potential_dynamic_array_spill_error:
+                        if spill_metadata is None:
+                            spill_metadata = _dynamic_array_spill_metadata_inspection(
+                                archive
+                            )
+                        cell_metadata_index = _dynamic_array_spill_metadata_index(
+                            cell.get("cm")
+                        )
+                        value_metadata_index = _dynamic_array_spill_metadata_index(
+                            cell.get("vm")
+                        )
+                        is_dynamic_array_spill_error = bool(
+                            cell_metadata_index
+                            in spill_metadata.dynamic_cell_metadata_indexes
+                            and value_metadata_index
+                            in spill_metadata.rich_value_metadata_indexes
+                        )
+
                     if issues:
                         unrecognized_cached_result_count += 1
                         result_type = "unrecognized"
@@ -34205,6 +34237,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                         is_name_error = False
                         is_null_error = False
                         is_value_error = False
+                        is_dynamic_array_spill_error = False
 
                     result_signature = _formula_cached_result_signature(
                         result_type,
@@ -34221,6 +34254,7 @@ def _formula_cached_result_metadata(path: Path) -> _FormulaCachedResultMetadata:
                             is_name_error=is_name_error,
                             is_null_error=is_null_error,
                             is_value_error=is_value_error,
+                            is_dynamic_array_spill_error=is_dynamic_array_spill_error,
                             result_signature=result_signature,
                         )
                     )
@@ -40517,6 +40551,14 @@ class _RichDataMetadataInspection:
     signature_entries: tuple[tuple[str, str], ...] = ()
 
 
+@dataclass(frozen=True)
+class _DynamicArraySpillMetadataInspection:
+    """Private metadata indexes needed to recognize a saved spill error."""
+
+    dynamic_cell_metadata_indexes: frozenset[int] = frozenset()
+    rich_value_metadata_indexes: frozenset[int] = frozenset()
+
+
 def _rich_data_metadata_inspection(
     root: ElementTree.Element,
     issues: list[tuple[str, str]],
@@ -40694,7 +40736,161 @@ def _rich_data_metadata_inspection(
     )
 
 
-def _rich_data_metadata(path: Path) -> _RichDataMetadata:
+def _dynamic_array_spill_metadata_package_is_declared(archive: ZipFile) -> bool:
+    """Require the canonical metadata part to be declared through OPC controls."""
+    try:
+        metadata_relationships = [
+            relationship
+            for relationship in _package_relationships(archive, "xl/workbook.xml")
+            if relationship.relationship_type.rsplit("/", maxsplit=1)[-1].casefold()
+            == "sheetmetadata"
+        ]
+        if (
+            len(metadata_relationships) != 1
+            or metadata_relationships[0].target_mode.casefold() != "internal"
+            or metadata_relationships[0].target != "xl/metadata.xml"
+        ):
+            return False
+
+        content_types = _xml_root(archive, "[Content_Types].xml")
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        return False
+    if (
+        _xml_namespace(content_types.tag) != _CONTENT_TYPES_NS
+        or _xml_local_name(content_types.tag) != "Types"
+    ):
+        return False
+
+    metadata_overrides = [
+        override
+        for override in content_types.findall(f"{{{_CONTENT_TYPES_NS}}}Override")
+        if _normalise_content_type_part_name(override.get("PartName", ""))
+        == "xl/metadata.xml"
+    ]
+    return len(metadata_overrides) == 1 and (
+        metadata_overrides[0].get("ContentType", "").casefold()
+        == _SHEET_METADATA_CONTENT_TYPE
+    )
+
+
+def _dynamic_array_spill_metadata_inspection(
+    archive: ZipFile,
+) -> _DynamicArraySpillMetadataInspection:
+    """Resolve the two metadata indexes used by a saved spill-error encoding.
+
+    FormulaFence accepts this evidence only when the normal dynamic-array
+    metadata reader, the rich-value metadata reader, and the surrounding OPC
+    declarations all agree.  A missing, malformed, or merely lookalike marker
+    intentionally yields no classification.
+    """
+    dynamic_inspection = _dynamic_metadata_indexes(archive)
+    if (
+        not dynamic_inspection.complete
+        or not dynamic_inspection.dynamic_indexes
+        or not _dynamic_array_spill_metadata_package_is_declared(archive)
+    ):
+        return _DynamicArraySpillMetadataInspection()
+    try:
+        metadata = _xml_root(archive, "xl/metadata.xml")
+    except (KeyError, ElementTree.ParseError, OSError, RuntimeError, ValueError):
+        return _DynamicArraySpillMetadataInspection()
+
+    issues: list[tuple[str, str]] = []
+    rich_inspection = _rich_data_metadata_inspection(metadata, issues)
+    if issues or not rich_inspection.value_metadata_indexes:
+        return _DynamicArraySpillMetadataInspection()
+    return _DynamicArraySpillMetadataInspection(
+        dynamic_cell_metadata_indexes=dynamic_inspection.dynamic_indexes,
+        rich_value_metadata_indexes=rich_inspection.value_metadata_indexes,
+    )
+
+
+def _dynamic_array_spill_metadata_index(value: str | None) -> int | None:
+    """Return one positive OOXML metadata index without accepting loose text."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    if not _RICH_DATA_UNSIGNED_PATTERN.fullmatch(candidate):
+        return None
+    try:
+        parsed = int(candidate)
+    except ValueError:
+        return None
+    return parsed if 0 < parsed <= 2_147_483_647 else None
+
+
+def _rich_data_metadata_is_only_saved_dynamic_array_spills(
+    archive: ZipFile,
+    metadata_inspections: Mapping[str, _RichDataMetadataInspection],
+    dynamic_array_spill_locations: frozenset[CellKey],
+) -> bool:
+    """Return whether every rich-value binding is a verified spill marker.
+
+    Excel-compatible spill-error encodings use an ``XLRICHVALUE`` metadata
+    record even when no rich-data package parts exist.  Do not turn that
+    compatibility marker into a rich-data coverage warning, but only suppress
+    the rich-data path after independently matching every such binding to a
+    verified saved spill error.
+    """
+    if len(metadata_inspections) != 1 or not dynamic_array_spill_locations:
+        return False
+    value_metadata_indexes = frozenset().union(
+        *(
+            inspection.value_metadata_indexes
+            for inspection in metadata_inspections.values()
+        )
+    )
+    if not value_metadata_indexes:
+        return False
+
+    probe_warnings: set[str] = set()
+    probe_issues: list[tuple[str, str]] = []
+    probe_budget = _RichDataBudget()
+    try:
+        worksheet_paths = _worksheet_xml_paths(archive)
+    except (BadZipFile, ElementTree.ParseError, KeyError, OSError, RuntimeError, ValueError):
+        return False
+    if len(set(worksheet_paths.values())) != len(worksheet_paths):
+        return False
+
+    worksheet_tag = f"{{{_SPREADSHEETML_NS}}}worksheet"
+    cell_tag = f"{{{_SPREADSHEETML_NS}}}c"
+    binding_locations: set[CellKey] = set()
+    binding_indexes: set[int] = set()
+    for sheet, worksheet_member in worksheet_paths.items():
+        root_tag, bindings, fallback_signature = (
+            _rich_data_worksheet_value_metadata_bindings(
+                archive,
+                worksheet_member,
+                probe_warnings,
+                probe_budget,
+                probe_issues,
+                value_metadata_indexes,
+                worksheet_tag=worksheet_tag,
+                cell_tag=cell_tag,
+            )
+        )
+        if root_tag != worksheet_tag or fallback_signature is not None:
+            return False
+        for coordinate, value_metadata_index in bindings:
+            location = (sheet, coordinate)
+            if location not in dynamic_array_spill_locations:
+                return False
+            binding_locations.add(location)
+            binding_indexes.add(value_metadata_index)
+    return (
+        not probe_warnings
+        and not probe_issues
+        and binding_locations == dynamic_array_spill_locations
+        and binding_indexes == value_metadata_indexes
+    )
+
+
+def _rich_data_metadata(
+    path: Path,
+    *,
+    dynamic_array_spill_locations: frozenset[CellKey] = frozenset(),
+) -> _RichDataMetadata:
     """Inventory Excel rich-data controls without resolving providers or URLs.
 
     Rich values can contain provider-backed entities, attached fields, and web
@@ -40729,9 +40925,14 @@ def _rich_data_metadata(path: Path) -> _RichDataMetadata:
             category_members: dict[str, set[str]] = defaultdict(set)
             rich_package_candidate = False
             for member in sorted(members):
-                if not member.casefold().startswith("xl/richdata/"):
+                member_key = member.casefold()
+                if member_key.rstrip("/") == "xl/richdata":
+                    # Some writers retain a zero-byte ZIP directory marker. It
+                    # is not an OPC rich-data part and must not create a gap.
                     continue
-                if "/_rels/" in member.casefold():
+                if not member_key.startswith("xl/richdata/"):
+                    continue
+                if "/_rels/" in member_key:
                     continue
                 rich_package_candidate = True
                 category = _rich_data_category_for_member(member)
@@ -40863,6 +41064,24 @@ def _rich_data_metadata(path: Path) -> _RichDataMetadata:
                 preliminary_rich_data = preliminary_rich_data or inspection.present
 
             if not preliminary_rich_data:
+                return _RichDataMetadata(RichDataSnapshot(), ())
+
+            if (
+                not rich_package_candidate
+                and not category_members
+                and not rich_workbook_relationships
+                and not content_type_warnings
+                and not relationship_probe_warnings
+                and not metadata_probe_warnings
+                and not content_type_probe_issues
+                and not relationship_probe_issues
+                and not metadata_probe_issues
+                and _rich_data_metadata_is_only_saved_dynamic_array_spills(
+                    archive,
+                    probe_metadata_inspections,
+                    dynamic_array_spill_locations,
+                )
+            ):
                 return _RichDataMetadata(RichDataSnapshot(), ())
 
             warnings.update(content_type_warnings)
@@ -51684,7 +51903,14 @@ def _load_snapshot_from_stable_source(
     worksheet_sparkline_metadata = _worksheet_sparkline_metadata(source)
     xml_mapping_metadata = _xml_mapping_metadata(source)
     digital_signature_metadata = _digital_signature_metadata(source)
-    rich_data_metadata = _rich_data_metadata(source)
+    rich_data_metadata = _rich_data_metadata(
+        source,
+        dynamic_array_spill_locations=frozenset(
+            entry.location
+            for entry in formula_cached_result_metadata.results.entries
+            if entry.is_dynamic_array_spill_error
+        ),
+    )
     custom_data_store_metadata = _custom_data_store_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)

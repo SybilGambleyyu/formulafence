@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.220.0 — 2026-08-02
+
+- Add high-severity `FF117` for a material raw workbook serial-date-system
+  control change: `workbookPr/@date1904` or the related optional
+  `@dateCompatibility` declaration. `no_workbook_date_system_changes` turns
+  that finding into the CI policy violation `FFP117`.
+- Surface the normalized Boolean controls, date-compatibility declaration status,
+  and an unrecognized-control count in safe profiles and report details.
+  Documented omitted/default spellings normalize together. The comparison does
+  not calculate formulas, convert serials to dates, infer client display, or
+  claim that a saved result is current; malformed or ambiguous controls remain
+  explicit coverage gaps.
+- Preserve the narrow XLSB profile boundary while exposing its core date-1904
+  bit. All other workbook date-system controls remain unassessed in that
+  profile-only workflow.
+
 ## 0.219.0 — 2026-08-01
 
 - Add an explicit profile-only `.xlsb` path. Its bounded BIFF12 core reader

@@ -91,6 +91,7 @@ from .helpers import (
     make_custom_data_store_model,
     make_custom_workbook_view_model,
     make_data_validation_model,
+    make_date_system_model,
     make_digital_signature_model,
     make_extended_chart_definition_model,
     make_external_data_refresh_model,
@@ -157,6 +158,7 @@ from .helpers import (
     make_zero_dimension_visibility_model,
     mark_array_formula_dynamic,
     rewrite,
+    set_workbook_date_system,
 )
 
 
@@ -1334,6 +1336,28 @@ def test_policy_can_block_formula_cached_result_changes(tmp_path) -> None:
     )
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP042"}
+
+
+def test_policy_can_block_workbook_date_system_changes(tmp_path) -> None:
+    baseline = make_date_system_model(tmp_path / "baseline.xlsx")
+    candidate = make_date_system_model(tmp_path / "candidate.xlsx")
+    set_workbook_date_system(
+        baseline,
+        date_1904="0",
+        date_compatibility="1",
+    )
+    set_workbook_date_system(
+        candidate,
+        date_1904="1",
+        date_compatibility="1",
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {"version": 1, "rules": {"no_workbook_date_system_changes": True}}
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {"FFP117"}
 
 
 def test_policy_can_block_rich_text_run_changes(tmp_path) -> None:

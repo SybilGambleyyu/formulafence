@@ -2068,6 +2068,27 @@ def profile_to_markdown(
     profile: dict[str, Any], *, max_bytes: int | None = None
 ) -> str:
     workbook = profile["workbook"]
+    date_system = profile["workbook_date_system"]
+    date_1904 = date_system["date_1904"]
+    date_compatibility = date_system["date_compatibility"]
+    date_compatibility_declared = date_system["date_compatibility_declared"]
+    date_1904_text = (
+        "yes" if date_1904 is True else "no" if date_1904 is False else "unknown"
+    )
+    date_compatibility_text = (
+        "yes"
+        if date_compatibility is True
+        else "no"
+        if date_compatibility is False
+        else "unknown"
+    )
+    date_compatibility_declaration_text = (
+        "present"
+        if date_compatibility_declared is True
+        else "omitted (defaults to yes)"
+        if date_compatibility_declared is False
+        else "unknown"
+    )
     coverage = profile.get("coverage")
     coverage_lines: list[str] = []
     if isinstance(coverage, dict):
@@ -2106,6 +2127,16 @@ def profile_to_markdown(
         f"- **Sheets:** {workbook['sheet_count']}",
         f"- **Non-empty cells:** {workbook['nonempty_cells']}",
         f"- **Formula cells:** {workbook['formula_cells']}",
+        f"- **1904 serial-date system:** {date_1904_text}",
+        f"- **Date compatibility:** {date_compatibility_text}",
+        (
+            "- **Date-compatibility declaration:** "
+            f"{date_compatibility_declaration_text}"
+        ),
+        (
+            "- **Unrecognized serial-date controls:** "
+            f"{date_system['unrecognized_control_count']}"
+        ),
         f"- **Tables:** {workbook['table_count']}",
         f"- **Data-validation rules:** {workbook['data_validation_rules']}",
         (

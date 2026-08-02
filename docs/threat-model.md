@@ -667,10 +667,11 @@ formula will produce.
   `profile` command also accepts `.xlsb` through a bounded binary core reader;
   its public artifact declares `xlsb_core_profile` scope and whether every
   encountered formula/defined-name token stream was reconstructed by the
-  verified subset. It does not make absence claims about workbook controls,
+  verified subset. It does not make absence claims about most workbook controls,
   formatting, array or dynamic-array metadata, calculation settings, external
   relationships, saved-result evidence, rich data, or other non-core surfaces.
-  `lint`, `diff`, `check`, and `portfolio` reject `.xlsb`, so this narrow reader
+  It exposes only the core `date_1904` bit from the wider workbook serial-date
+  system. `lint`, `diff`, `check`, and `portfolio` reject `.xlsb`, so this narrow reader
   cannot silently become a CI decision or semantic comparison. Legacy `.xls`
   and file-encrypted or password-to-open workbooks are outside scope. Workbook
   and worksheet protection flags inside an otherwise readable OOXML workbook
@@ -2227,8 +2228,8 @@ formula will produce.
 - A formula that the underlying tokenizer cannot inspect is recorded by cell
   location in the profile, and a newly introduced one emits `FF016`; its graph
   is deliberately omitted rather than partially guessed.
-- It inventories sheet visibility, defined names, calculation settings, the VBA
-  payload; OPC package XML-signature/certificate-part relationships and
+- It inventories sheet visibility, defined names, calculation settings, raw
+  workbook serial-date-system controls, the VBA payload; OPC package XML-signature/certificate-part relationships and
   payloads; classic/Agile/V3 VBA signature payloads/relationships; XLM
   macro-sheet packages; RibbonX custom UI packages; Office Web
   Add-in task-pane packages, PivotTable view/cache-schema/shared-item/cached-

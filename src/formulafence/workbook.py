@@ -134,6 +134,7 @@ from formulafence.models import (
     ThreadedCommentSnapshot,
     UnqualifiedRuntimeFunctionSnapshot,
     WhatIfDataTableSnapshot,
+    WorkbookDateSystemSnapshot,
     WorkbookLoadError,
     WorkbookProtectionSnapshot,
     WorkbookSnapshot,
@@ -1515,6 +1516,14 @@ class _WorkbookTabOrderMetadata:
     complete: bool
     worksheet_tab_order: tuple[str, ...]
     worksheet_tab_order_complete: bool
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _WorkbookDateSystemMetadata:
+    """Raw OOXML serial-date controls retained before reader normalization."""
+
+    date_system: WorkbookDateSystemSnapshot
     warnings: tuple[str, ...]
 
 
@@ -6785,6 +6794,138 @@ def _workbook_tab_order_metadata(path: Path) -> _WorkbookTabOrderMetadata:
         worksheet_tab_order=tuple(worksheet_tab_order),
         worksheet_tab_order_complete=worksheet_tab_order_complete,
         warnings=tuple(sorted(warnings)),
+    )
+
+
+def _workbook_date_system_boolean(value: str) -> bool | None:
+    """Parse one OOXML Boolean date-system control without guessing."""
+
+    normalized = value.strip().casefold()
+    if normalized in {"0", "false"}:
+        return False
+    if normalized in {"1", "true"}:
+        return True
+    return None
+
+
+def _workbook_date_system_metadata(path: Path) -> _WorkbookDateSystemMetadata:
+    """Read ``workbookPr`` date controls without converting any cell serials.
+
+    The ordinary workbook reader materializes date-formatted numeric cells using
+    the selected epoch. Read this workbook-wide state separately from raw OOXML
+    so a diff can identify that global cause instead of only showing the
+    resulting cell values. Invalid control values remain a visible coverage
+    gap rather than being coerced to a date system.
+    """
+
+    default = WorkbookDateSystemSnapshot()
+    try:
+        with ZipFile(path) as archive:
+            workbook = _xml_root(archive, "xl/workbook.xml")
+    except (BadZipFile, ElementTree.ParseError, KeyError, OSError, ValueError) as error:
+        return _WorkbookDateSystemMetadata(
+            WorkbookDateSystemSnapshot(
+                date_1904=None,
+                date_compatibility=None,
+                date_compatibility_declared=None,
+                unrecognized_control_count=1,
+                control_signature=_private_external_data_signature(
+                    (("workbook-date-system-read-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect workbook serial-date system controls "
+                f"({type(error).__name__}); affected date interpretation was not compared.",
+            ),
+        )
+
+    if (
+        _xml_local_name(workbook.tag) != "workbook"
+        or _xml_namespace(workbook.tag)
+        not in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+    ):
+        return _WorkbookDateSystemMetadata(
+            WorkbookDateSystemSnapshot(
+                date_1904=None,
+                date_compatibility=None,
+                date_compatibility_declared=None,
+                unrecognized_control_count=1,
+                control_signature=_private_external_data_signature(
+                    (("unexpected-workbook-date-system-root", repr(workbook.tag)),)
+                ),
+            ),
+            (
+                "FormulaFence found an unexpected workbook root while inspecting "
+                "serial-date system controls; affected date interpretation was not compared.",
+            ),
+        )
+
+    properties = [
+        child
+        for child in workbook
+        if (
+            _xml_local_name(child.tag) == "workbookPr"
+            and _xml_namespace(child.tag)
+            in {_SPREADSHEETML_NS, _STRICT_SPREADSHEETML_NS}
+        )
+    ]
+    if not properties:
+        return _WorkbookDateSystemMetadata(default, ())
+    if len(properties) != 1:
+        return _WorkbookDateSystemMetadata(
+            WorkbookDateSystemSnapshot(
+                date_1904=None,
+                date_compatibility=None,
+                date_compatibility_declared=None,
+                unrecognized_control_count=1,
+                control_signature=_private_external_data_signature(
+                    (("duplicate-workbookPr", str(len(properties))),)
+                ),
+            ),
+            (
+                "FormulaFence found multiple workbookPr elements; affected serial-date "
+                "system controls were not compared.",
+            ),
+        )
+
+    property_element = properties[0]
+    invalid_controls: list[tuple[str, str]] = []
+
+    def parse(attribute: str, default_value: bool | None) -> bool | None:
+        raw_value = property_element.get(attribute)
+        if raw_value is None:
+            return default_value
+        if (parsed := _workbook_date_system_boolean(raw_value)) is not None:
+            return parsed
+        invalid_controls.append((attribute, raw_value))
+        return None
+
+    date_1904 = parse("date1904", False)
+    date_compatibility = parse("dateCompatibility", True)
+    date_compatibility_declared = property_element.get("dateCompatibility") is not None
+    if not invalid_controls:
+        return _WorkbookDateSystemMetadata(
+            WorkbookDateSystemSnapshot(
+                date_1904=date_1904,
+                date_compatibility=date_compatibility,
+                date_compatibility_declared=date_compatibility_declared,
+            ),
+            (),
+        )
+    return _WorkbookDateSystemMetadata(
+        WorkbookDateSystemSnapshot(
+            date_1904=date_1904,
+            date_compatibility=date_compatibility,
+            date_compatibility_declared=date_compatibility_declared,
+            unrecognized_control_count=len(invalid_controls),
+            control_signature=_private_external_data_signature(
+                tuple(sorted(invalid_controls))
+            ),
+        ),
+        (
+            "FormulaFence found unrecognized workbook serial-date system control values; "
+            "affected date interpretation was not compared.",
+        ),
     )
 
 
@@ -51948,9 +52089,10 @@ def _xlsb_profile_snapshot_from_core(
             "workflows are intentionally unavailable."
         ),
         (
-            "XLSB core profile coverage excludes workbook controls, formatting, array "
-            "and dynamic-array metadata, calculation settings, external relationships, "
-            "saved-result evidence, rich data, and other non-core package surfaces."
+            "XLSB core profile coverage excludes most workbook controls, formatting, "
+            "array and dynamic-array metadata, calculation settings, external "
+            "relationships, saved-result evidence, rich data, and other non-core "
+            "package surfaces. It exposes only the core workbook date-1904 bit."
         ),
     }
     if not core.formula_text_coverage_complete:
@@ -51978,6 +52120,7 @@ def _xlsb_profile_snapshot_from_core(
         macro_hash=_vba_hash(source),
         calculation_settings={},
         parser_warnings=tuple(sorted(parser_warnings)),
+        workbook_date_system=WorkbookDateSystemSnapshot(date_1904=core.date_1904),
         array_formula_metadata_complete=False,
         tokenization_failure_cells=unsupported_formula_cells,
         inspection_scope=_XLSB_PROFILE_INSPECTION_SCOPE,
@@ -52093,6 +52236,7 @@ def _load_snapshot_from_stable_source(
     _validate_ooxml_semantic_reader_resources(source, archive_members)
 
     workbook_tab_order_metadata = _workbook_tab_order_metadata(source)
+    workbook_date_system_metadata = _workbook_date_system_metadata(source)
     xlm_macro_metadata = _xlm_macro_metadata(source)
     xlm_automatic_macro_binding_metadata = _xlm_automatic_macro_binding_metadata(
         source
@@ -52220,6 +52364,7 @@ def _load_snapshot_from_stable_source(
     parser_warnings.update(external_relationship_metadata.warnings)
     parser_warnings.update(python_in_excel_metadata.warnings)
     parser_warnings.update(workbook_tab_order_metadata.warnings)
+    parser_warnings.update(workbook_date_system_metadata.warnings)
     has_array_formulas = any(
         _is_array_formula(cell)
         for worksheet in workbook.worksheets
@@ -53457,6 +53602,7 @@ def _load_snapshot_from_stable_source(
         macro_hash=_vba_hash(source),
         calculation_settings=_calculation_settings(workbook),
         parser_warnings=tuple(sorted(parser_warnings)),
+        workbook_date_system=workbook_date_system_metadata.date_system,
     )
 
 
@@ -53605,6 +53751,7 @@ def profile_snapshot(
             assignment.profile_dict()
             for assignment in snapshot.cell_protection_assignments
         ],
+        "workbook_date_system": snapshot.workbook_date_system.profile_dict(),
         "external_data_refresh_settings": snapshot.external_data_refresh_settings.to_dict(),
         "external_data_connections": [
             connection.profile_dict() for connection in snapshot.external_data_connections

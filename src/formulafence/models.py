@@ -728,6 +728,37 @@ class ExternalDataRefreshSettingsSnapshot:
 
 
 @dataclass(frozen=True)
+class WorkbookDateSystemSnapshot:
+    """Stored workbook-wide controls for interpreting spreadsheet date serials.
+
+    ``date1904`` selects the traditional 1900 or 1904 serial-date system.
+    ``dateCompatibility`` can alter how that selector is interpreted by an
+    OOXML consumer. Its effective documented default is true; the separately
+    retained declaration flag distinguishes an omitted default from an
+    explicit spelling without turning that equivalent spelling into a diff.
+    FormulaFence never calculates dates or predicts an application's display.
+    """
+
+    date_1904: bool | None = False
+    date_compatibility: bool | None = True
+    date_compatibility_declared: bool | None = field(default=False, compare=False)
+    unrecognized_control_count: int = 0
+    control_signature: str | None = field(default=None, repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the date-system controls without cell values or formulas."""
+        return {
+            "date_1904": self.date_1904,
+            "date_compatibility": self.date_compatibility,
+            "date_compatibility_declared": self.date_compatibility_declared,
+            "unrecognized_control_count": self.unrecognized_control_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class ExternalDataConnectionSnapshot:
     """One OOXML external-data connection without its source material."""
 
@@ -4562,6 +4593,11 @@ class WorkbookSnapshot:
     # make that boundary explicit in its public profile artifact.
     inspection_scope: str = "full"
     formula_text_coverage_complete: bool | None = None
+    # Keep this late default field to avoid changing positional construction of
+    # existing snapshot fields in programmatic integrations.
+    workbook_date_system: WorkbookDateSystemSnapshot = field(
+        default_factory=WorkbookDateSystemSnapshot
+    )
 
     def require_full_inspection(self, operation: str) -> None:
         """Reject full-semantic work against an explicitly narrowed snapshot."""
@@ -4587,6 +4623,11 @@ class WorkbookSnapshot:
             "sheet_count": len(self.sheets),
             "nonempty_cells": len(self.cells),
             "formula_cells": sum(1 for cell in self.cells.values() if cell.is_formula),
+            "workbook_date_1904": self.workbook_date_system.date_1904,
+            "workbook_date_compatibility": self.workbook_date_system.date_compatibility,
+            "workbook_date_unrecognized_controls": (
+                self.workbook_date_system.unrecognized_control_count
+            ),
             "formula_cached_result_cell_count": (
                 self.formula_cached_results.cached_result_cell_count
             ),

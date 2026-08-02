@@ -312,6 +312,7 @@ from .helpers import (
     make_custom_data_store_model,
     make_custom_workbook_view_model,
     make_data_validation_model,
+    make_date_system_model,
     make_digital_signature_model,
     make_dynamic_array_spill_cached_result_model,
     make_empty_chart_sheet_custom_view_container_model,
@@ -500,6 +501,7 @@ from .helpers import (
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
     set_slicer_timeline_equivalent_defaults,
+    set_workbook_date_system,
     unbind_cell_hyperlink_relationship,
     unbind_custom_workbook_view,
     use_slicer_timeline_2011_relationship_type,
@@ -2820,6 +2822,195 @@ def test_external_data_connection_defaults_are_canonical(tmp_path) -> None:
         if change.kind == "external_data_connections_changed"
     }
     assert "FF023" not in {finding.rule_id for finding in report.findings}
+
+
+def test_workbook_date_system_controls_are_profiled_and_diffed(tmp_path) -> None:
+    baseline = make_date_system_model(tmp_path / "baseline.xlsx")
+    set_workbook_date_system(
+        baseline,
+        date_1904="0",
+        date_compatibility="1",
+    )
+    candidate = tmp_path / "candidate.xlsx"
+    shutil.copyfile(baseline, candidate)
+    set_workbook_date_system(
+        candidate,
+        date_1904="1",
+        date_compatibility="1",
+    )
+
+    with ZipFile(baseline) as before_archive, ZipFile(candidate) as after_archive:
+        before_parts = {
+            entry.filename: before_archive.read(entry.filename)
+            for entry in before_archive.infolist()
+        }
+        after_parts = {
+            entry.filename: after_archive.read(entry.filename)
+            for entry in after_archive.infolist()
+        }
+    assert before_parts.keys() == after_parts.keys()
+    assert {
+        name
+        for name in before_parts
+        if before_parts[name] != after_parts[name]
+    } == {"xl/workbook.xml"}
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+
+    assert baseline_snapshot.workbook_date_system.to_dict() == {
+        "date_1904": False,
+        "date_compatibility": True,
+        "date_compatibility_declared": True,
+        "unrecognized_control_count": 0,
+    }
+    assert candidate_snapshot.workbook_date_system.to_dict() == {
+        "date_1904": True,
+        "date_compatibility": True,
+        "date_compatibility_declared": True,
+        "unrecognized_control_count": 0,
+    }
+    assert profile["workbook_date_system"] == {
+        "date_1904": False,
+        "date_compatibility": True,
+        "date_compatibility_declared": True,
+        "unrecognized_control_count": 0,
+    }
+    assert profile["workbook"]["workbook_date_1904"] is False
+    assert "**1904 serial-date system:** no" in markdown
+    assert "**Date compatibility:** yes" in markdown
+    assert "**Date-compatibility declaration:** present" in markdown
+    assert baseline_snapshot.cells[("Inputs", "B2")].value == "2024-01-01T00:00:00"
+    assert candidate_snapshot.cells[("Inputs", "B2")].value == "2028-01-02T00:00:00"
+
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "workbook_date_system_changed"
+    )
+
+    assert change.location is None
+    assert change.details == {
+        "before": {
+            "date_1904": False,
+            "date_compatibility": True,
+            "date_compatibility_declared": True,
+            "unrecognized_control_count": 0,
+        },
+        "after": {
+            "date_1904": True,
+            "date_compatibility": True,
+            "date_compatibility_declared": True,
+            "unrecognized_control_count": 0,
+        },
+    }
+    assert "value_changed" in {change.kind for change in report.changes}
+    assert {finding.rule_id for finding in report.findings} >= {"FF117"}
+
+
+def test_workbook_date_system_defaults_are_canonical(tmp_path) -> None:
+    baseline = make_date_system_model(tmp_path / "baseline.xlsx")
+    candidate = make_date_system_model(tmp_path / "candidate.xlsx")
+    set_workbook_date_system(
+        baseline,
+        date_1904=None,
+        date_compatibility=None,
+    )
+    set_workbook_date_system(
+        candidate,
+        date_1904="0",
+        date_compatibility="1",
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert not {
+        change.kind
+        for change in report.changes
+        if change.kind == "workbook_date_system_changed"
+    }
+    assert "FF117" not in {finding.rule_id for finding in report.findings}
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    assert baseline_snapshot.workbook_date_system.to_dict() == {
+        "date_1904": False,
+        "date_compatibility": True,
+        "date_compatibility_declared": False,
+        "unrecognized_control_count": 0,
+    }
+    assert candidate_snapshot.workbook_date_system.to_dict() == {
+        "date_1904": False,
+        "date_compatibility": True,
+        "date_compatibility_declared": True,
+        "unrecognized_control_count": 0,
+    }
+    assert (
+        "**Date-compatibility declaration:** omitted (defaults to yes)"
+        in profile_to_markdown(profile_snapshot(baseline_snapshot))
+    )
+
+
+def test_workbook_date_compatibility_control_is_diffed_independently(tmp_path) -> None:
+    baseline = make_date_system_model(tmp_path / "baseline.xlsx")
+    set_workbook_date_system(
+        baseline,
+        date_1904="0",
+        date_compatibility="0",
+    )
+    candidate = tmp_path / "candidate.xlsx"
+    shutil.copyfile(baseline, candidate)
+    set_workbook_date_system(
+        candidate,
+        date_1904="0",
+        date_compatibility="1",
+    )
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+
+    assert [change.kind for change in report.changes] == [
+        "workbook_date_system_changed"
+    ]
+    assert report.changes[0].details == {
+        "before": {
+            "date_1904": False,
+            "date_compatibility": False,
+            "date_compatibility_declared": True,
+            "unrecognized_control_count": 0,
+        },
+        "after": {
+            "date_1904": False,
+            "date_compatibility": True,
+            "date_compatibility_declared": True,
+            "unrecognized_control_count": 0,
+        },
+    }
+    assert {finding.rule_id for finding in report.findings} == {"FF117"}
+
+
+def test_invalid_workbook_date_system_controls_are_visible_coverage_gaps(tmp_path) -> None:
+    workbook = make_date_system_model(tmp_path / "invalid.xlsx")
+    set_workbook_date_system(
+        workbook,
+        date_1904="not-a-boolean",
+        date_compatibility="also-not-a-boolean",
+    )
+
+    snapshot = load_snapshot(workbook)
+
+    assert snapshot.workbook_date_system.to_dict() == {
+        "date_1904": None,
+        "date_compatibility": None,
+        "date_compatibility_declared": True,
+        "unrecognized_control_count": 2,
+    }
+    assert any(
+        "unrecognized workbook serial-date system control values" in warning
+        for warning in snapshot.parser_warnings
+    )
 
 
 def test_external_data_connection_xml_budget_stops_tree_materialization(

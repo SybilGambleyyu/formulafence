@@ -5,6 +5,28 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Workbook serial-date-system controls — 2026-08-02
+
+Microsoft documents that the workbook `date1904` setting chooses the 1900 or
+1904 date base, with a 1,462-day difference between the systems in normal Excel
+use. FormulaFence therefore compares the stored workbook-wide control rather
+than trying to infer a date from a date-formatted cell. The boundary follows the
+Open XML SDK [`workbookPr` surface](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.workbookproperties?view=openxml-3.0.1)
+and Microsoft's [date-system guidance](https://support.microsoft.com/en-us/Excel/change-the-date-system-format-or-two-digit-year-interpretation).
+
+The release test creates a three-sheet model with a fixed raw numeric serial
+`45292`, a date number format, one ordinary formula consumer, and one downstream
+dashboard consumer. It clones the baseline package, then changes only
+`xl/workbook.xml`: `workbookPr/@date1904` moves from `0` to `1` while
+`@dateCompatibility="1"`, the raw serial, number format, formulas, and all other
+package members remain fixed. FormulaFence reports the global high-severity
+`FF117` control change alongside any ordinary reader-visible value difference;
+the policy regression produces `FFP117`. Separate canonical-default and invalid
+control cases verify that omitted `date1904` equals false and omitted
+`dateCompatibility` equals true, while malformed values remain explicit coverage
+warnings instead of a guessed epoch. The 0.220.0 tree
+passed **1,589 tests**, `git diff --check`, and `ruff check` before packaging.
+
 ## Bounded XLSB profile reader — 2026-08-01
 
 XLSB stores workbook records and formula expressions in the binary structures

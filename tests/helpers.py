@@ -181,6 +181,59 @@ def make_model(path: Path) -> Path:
     return path
 
 
+def make_date_system_model(path: Path) -> Path:
+    """Create a model with one raw serial displayed as a date and a consumer."""
+    workbook = Workbook()
+    inputs = workbook.active
+    inputs.title = "Inputs"
+    inputs["A1"] = "Stored date serial"
+    inputs["B2"] = 45292
+    inputs["B2"].number_format = "yyyy-mm-dd"
+
+    model = workbook.create_sheet("Model")
+    model["A1"] = "Date plus 30 days"
+    model["B2"] = "=Inputs!$B$2+30"
+    model["B2"].number_format = "yyyy-mm-dd"
+
+    dashboard = workbook.create_sheet("Dashboard")
+    dashboard["A1"] = "Headline date"
+    dashboard["B12"] = "=Model!$B$2"
+    dashboard["B12"].number_format = "yyyy-mm-dd"
+    workbook.save(path)
+    return path
+
+
+def set_workbook_date_system(
+    path: Path,
+    *,
+    date_1904: str | None,
+    date_compatibility: str | None,
+) -> Path:
+    """Set raw workbookPr date-system controls without rewriting cell serials."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        workbook = ElementTree.fromstring(contents["xl/workbook.xml"])
+        properties = workbook.find(f"{{{_SPREADSHEETML_NS}}}workbookPr")
+        if properties is None:
+            properties = ElementTree.Element(f"{{{_SPREADSHEETML_NS}}}workbookPr")
+            workbook.insert(0, properties)
+        for attribute, value in {
+            "date1904": date_1904,
+            "dateCompatibility": date_compatibility,
+        }.items():
+            if value is None:
+                properties.attrib.pop(attribute, None)
+            else:
+                properties.set(attribute, value)
+        contents["xl/workbook.xml"] = ElementTree.tostring(
+            workbook,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".date-system.tmp.xlsx")
+
+
 def make_formula_external_action_model(path: Path) -> Path:
     """Create stored formulas with known external-action function surfaces."""
     workbook = Workbook()

@@ -1136,6 +1136,38 @@ def _workbook_control_changes(
             )
         )
 
+    if before.workbook_date_system != after.workbook_date_system:
+        details: dict[str, object] = {
+            "before": before.workbook_date_system.to_dict(),
+            "after": after.workbook_date_system.to_dict(),
+        }
+        if (
+            before.workbook_date_system.control_signature
+            != after.workbook_date_system.control_signature
+        ):
+            details["date_system_control_material_changed"] = True
+        if (
+            before.workbook_date_system.unrecognized_control_count
+            != after.workbook_date_system.unrecognized_control_count
+        ):
+            details["unrecognized_date_system_control_changed"] = True
+        changes.append(
+            Change(
+                "workbook_date_system_changed",
+                None,
+                "high",
+                details=details,
+            )
+        )
+        findings.append(
+            Finding(
+                "FF117",
+                "high",
+                "Workbook serial-date system controls changed.",
+                details=details,
+            )
+        )
+
     if before.macro_hash != after.macro_hash:
         changes.append(
             Change(

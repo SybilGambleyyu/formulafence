@@ -38,6 +38,7 @@ rules:
   no_worksheet_dimension_changes: true
   no_worksheet_display_control_changes: true
   no_worksheet_print_layout_changes: true
+  no_workbook_date_system_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -160,6 +161,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_worksheet_dimension_changes` | boolean | A material worksheet default row/column size, Office 2010 baseline adjustment, positive direct row/column size, AutoFit, or active thick-border automatic row-height adjustment changes. Dimension values, targets, and raw XML are compared privately. |
 | `no_worksheet_display_control_changes` | boolean | A material raw worksheet view changes hidden-zero, formula-display, gridline/gridline-colour, row/column-header, outline-symbol, ruler, page-whitespace, right-to-left, non-normal-view, or split/frozen-pane controls. Sheet names, targets, pane positions, and raw view XML are compared privately. |
 | `no_worksheet_print_layout_changes` | boolean | A material saved print-area/title, print-option, margin, page-setup, fit-to-page, header/footer, or manual page-break control changes. Print ranges, header/footer text, page values, printer-setting references, and raw XML are compared privately. |
+| `no_workbook_date_system_changes` | boolean | A normalized `workbookPr/@date1904` or `workbookPr/@dateCompatibility` serial-date-system control changes. FormulaFence normalizes documented Boolean defaults, but does not calculate formulas, convert serials to dates, or predict a client display. |
 | `no_formula_cached_result_changes` | boolean | A saved formula result changes without a changed formula at that cell or a statically visible ordinary-cell precedent change. Result values, error text, result digests, and formula-cell locations are compared privately. |
 | `no_rich_text_run_changes` | boolean | A shared or inline rich-text run property, styled-character boundary, or phonetic hint/property changes. Character text, format details, shared-string indexes, and locations are compared privately. |
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
@@ -1424,6 +1426,22 @@ infer Excel client behavior. The boundary follows the Open XML SDK
 Theme-part surface and Microsoft's
 [conditional-formatting guidance](https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-conditional-formatting),
 which illustrates Theme-indexed colours in spreadsheet formatting.
+
+The workbook-level `workbookPr/@date1904` selector controls whether spreadsheet
+serials use the traditional 1900 or 1904 date base. FormulaFence also retains
+the optional `dateCompatibility` declaration because it can affect how that
+selector is interpreted. A material raw control change emits `FF117`; enable
+`no_workbook_date_system_changes` to block it as `FFP117` in CI. Profiles and
+report details expose only the normalized Boolean controls, date-compatibility
+declaration status, and an unrecognized-control count. FormulaFence does not
+calculate a formula, convert any cell serial into a date, infer a visible result,
+or decide what an application will do when it opens the workbook. An absent
+`date1904` uses its documented false default, and absent `dateCompatibility`
+uses its documented true default, so equivalent omitted/default spelling stays
+quiet. Ambiguous or malformed declarations create a coverage warning rather
+than a guessed date system. The boundary follows the Open XML SDK
+[`workbookPr` documentation](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.workbookproperties?view=openxml-3.0.1)
+and Microsoft's [date-system guidance](https://support.microsoft.com/en-US/Excel/change-the-date-system-format-or-two-digit-year-interpretation).
 
 SpreadsheetML can retain the last calculated result beside a formula in the
 same `<c>` cell. FormulaFence reads raw `<f>` and `<v>` elements together,

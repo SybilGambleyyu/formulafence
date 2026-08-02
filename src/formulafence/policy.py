@@ -48,6 +48,7 @@ _RULE_FIELDS = {
     "no_worksheet_dimension_changes",
     "no_worksheet_display_control_changes",
     "no_worksheet_print_layout_changes",
+    "no_workbook_date_system_changes",
     "no_formula_cached_result_changes",
     "no_rich_text_run_changes",
     "no_cell_hyperlink_changes",
@@ -226,6 +227,7 @@ class Policy:
     no_worksheet_dimension_changes: bool = False
     no_worksheet_display_control_changes: bool = False
     no_worksheet_print_layout_changes: bool = False
+    no_workbook_date_system_changes: bool = False
     no_formula_cached_result_changes: bool = False
     no_rich_text_run_changes: bool = False
     no_cell_hyperlink_changes: bool = False
@@ -311,6 +313,7 @@ rules:
   no_worksheet_dimension_changes: true
   no_worksheet_display_control_changes: true
   no_worksheet_print_layout_changes: true
+  no_workbook_date_system_changes: true
   no_formula_cached_result_changes: true
   no_rich_text_run_changes: true
   no_cell_hyperlink_changes: true
@@ -507,6 +510,9 @@ def parse_policy(data: object) -> Policy:
         ),
         no_worksheet_print_layout_changes=_boolean_rule(
             rules, "no_worksheet_print_layout_changes"
+        ),
+        no_workbook_date_system_changes=_boolean_rule(
+            rules, "no_workbook_date_system_changes"
         ),
         no_formula_cached_result_changes=_boolean_rule(
             rules, "no_formula_cached_result_changes"
@@ -1348,6 +1354,16 @@ def evaluate_policy(report: DiffReport, policy: Policy) -> list[Finding]:
                     "FFP042",
                     "high",
                     "Policy forbids unexplained stored formula-result changes.",
+                    details=finding.details,
+                )
+            )
+    if policy.no_workbook_date_system_changes:
+        for finding in _rule_triggered(report, "FF117"):
+            violations.append(
+                Finding(
+                    "FFP117",
+                    "high",
+                    "Policy forbids workbook serial-date system changes.",
                     details=finding.details,
                 )
             )

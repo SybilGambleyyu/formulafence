@@ -41,7 +41,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.219.0/formulafence-0.219.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.220.0/formulafence-0.220.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -80,12 +80,13 @@ Defined-name labels and definition bodies are withheld too; the inventory keeps
 only their aggregate count and formula-text coverage status.
 
 This is not full XLSB inspection. XLSB profiles do not inspect or make absence
-claims about workbook controls, formatting, array or dynamic-array metadata,
-calculation settings, external relationships, saved-result evidence, rich data,
-or other non-core package surfaces. Markdown explicitly marks counts outside
-that scope as *unassessed*. `lint`, `diff`, `check`, and `portfolio` continue to
-accept only `.xlsx` and `.xlsm`, so a narrow snapshot cannot silently become a
-CI decision or a semantic comparison.
+claims about most workbook controls, formatting, array or dynamic-array
+metadata, calculation settings, external relationships, saved-result evidence,
+rich data, or other non-core package surfaces. They expose only the core
+date-1904 bit from the wider workbook date-system surface. Markdown explicitly
+marks counts outside that scope as *unassessed*. `lint`, `diff`, `check`, and
+`portfolio` continue to accept only `.xlsx` and `.xlsm`, so a narrow snapshot
+cannot silently become a CI decision or a semantic comparison.
 
 ### Formula lint
 
@@ -529,7 +530,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.219.0
+  uses: SybilGambleyyu/formulafence@v0.220.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1151,7 +1152,7 @@ allowed_changes:
 | Formula-pattern break | An edited formula that no longer matches equal neighboring formulas |
 | Formula lint | Conservative blank/error, manual-value, text-marker, and formula-outlier candidates inside a single workbook's copied blocks; narrowly scoped simple aggregate ranges that stop before a contiguous numeric gap; direct static conditional-aggregate range-shape mismatches for `SUMIFS`, `COUNTIFS`, `AVERAGEIFS`, `MAXIFS`, and `MINIFS`, direct static `SUMPRODUCT` array-shape mismatches, direct static `MMULT` inner-dimension mismatches, direct static `SUM` argument-range overlaps, direct literal `AGGREGATE` function-code/option/ref2 errors, native `MOD` direct literal zero divisors, direct literal `YEARFRAC`/`WEEKDAY`/`WEEKNUM` unsupported codes, workbook-level closed-external-workbook risks in selected native criteria functions, and verified saved dynamic-array spill or null-intersection results; direct static `VLOOKUP`/`HLOOKUP` out-of-range literal return indices, direct literal `XLOOKUP`/`XMATCH` unsupported mode codes, and direct literal `LARGE`/`SMALL` impossible ranks; explicit direct unlocks on protected formula cells; and formula workbooks explicitly saved with incomplete manual calculation; copied-pattern findings require three local matching peers |
 | Portfolio control | Recursive, relative-path workbook matching with per-file semantic reports, explicit additions/removals, bounded static cross-workbook impact evidence, unreadable-file evidence, bounded inventory/traversal, and consolidated JSON/Markdown/HTML/SARIF for CI |
-| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
+| Workbook controls | Sheet visibility, defined names, Excel-table definitions, AutoFilter/sort/row-and-column visibility including zero-sized dimensions, material worksheet-dimension controls, ignored-error, modern Named Sheet View and legacy Excel Custom View controls, Excel Table Style controls, legacy shared-workbook revision headers/logs, cell-number-format, cell-font, cell-fill, effective cell-alignment, material worksheet-display and worksheet print-layout controls, workbook serial-date-system controls, workbook DrawingML Theme parts/direct image relationships, native worksheet pictures/backgrounds/header-footer watermarks, character-level rich-text runs/phonetic hints, ordinary worksheet-cell hyperlinks, Office 2010 worksheet sparklines, SpreadsheetML XML Maps, OPC package XML-signature envelopes/certificate parts, VBA project signature payloads (classic, Agile, and V3), unexplained stored-formula-result controls, legacy Excel Note/VML Note-shape/threaded-placeholder controls, modern threaded-comment/reply/mention/person controls, and non-chart Worksheet DrawingML regular/connector/group shapes plus bounded SmartArt `xdr:graphicFrame` diagrams and direct Diagram Data image payloads; Excel What-If Data Tables and Scenario Manager definitions, data-validation, conditional-formatting, operational protection, external-data refresh, external-link-package, package-wide external OPC relationships, Python-in-Excel code, namespaced Office custom-function candidates, worksheet and formula-defined code-resource registration calls, formula-defined XLM `REGISTER`/`EVALUATE` calls, XLM macro-sheet programs and automatic-macro bindings, Office RibbonX, Office Web Add-in task-pane/worksheet/in-content bindings, PivotTable views/cache schema/shared items/cached records, Slicer and Timeline cache filter state, embedded Power Pivot/Data Model packages, DrawingML chart definitions/cached series/overlay shapes, modern and legacy-VML worksheet controls/OLE, and Power Query controls; array-formula mode/fixed-output range, static 3-D-reference scope, calculation settings, and VBA payload changes |
 | Formula hazards | New external-workbook references and `#REF!` formulas |
 | External-workbook link surfaces | Private static ledger across worksheet formulas, defined names, data-validation criteria, and standard/ChartEx chart formulas; catches same-location source or target swaps without evaluating, resolving, or exposing endpoint material |
 | Formula external-action and data-provider surfaces | Material stored `HYPERLINK`, `WEBSERVICE`, `IMAGE`, `RTD`, `STOCKHISTORY`, or documented `CUBE*` call changes in cells, formula-defined names, or named `LAMBDA`s, including same-count destination, market-provider, connection, or query swaps, without evaluating formulas or exposing their arguments in the private ledger |
@@ -2551,6 +2552,25 @@ automatic page breaks, resolve client/printer defaults or printer-specific
 layouts and extension-specific behavior. The scope follows Microsoft's
 [print-area guidance](https://support.microsoft.com/en-us/excel/set-or-clear-a-print-area-on-a-worksheet)
 and [`PageLayout` control surface](https://learn.microsoft.com/en-us/javascript/api/excel/excel.pagelayout?view=excel-js-preview).
+
+FormulaFence also compares the workbook-wide **serial-date system controls**.
+The raw `workbookPr/@date1904` selector changes whether stored serials use the
+1900 or 1904 date base; `workbookPr/@dateCompatibility` is retained alongside
+it because it can affect how that selector is interpreted. A material control
+change emits `FF117`; enable `no_workbook_date_system_changes` to make that
+boundary `FFP117` in CI.
+
+Profiles and `FF117` details expose only the normalized Boolean selector and
+date-compatibility state, whether date compatibility was explicitly declared,
+and an unrecognized-control count. FormulaFence does not calculate a formula,
+convert a serial into a date, infer a client display, or claim that a saved
+formula result is current. Missing `date1904` uses its documented false default;
+missing `dateCompatibility` uses its documented true default, so an omitted
+declaration and an explicit true spelling normalize together. Malformed or
+ambiguous control metadata is a coverage warning rather than a coerced
+date-system choice. The scope follows
+the Open XML SDK [`workbookPr` documentation](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.workbookproperties?view=openxml-3.0.1)
+and Microsoft's [date-system guidance](https://support.microsoft.com/en-US/Excel/change-the-date-system-format-or-two-digit-year-interpretation).
 
 FormulaFence also inventories the workbook-level **DrawingML Theme**. A Theme
 can change the colour, font, or effect schemes used by themed cells, charts,

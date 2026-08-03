@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.223.0 — 2026-08-03
+
+- Tighten the OPC package-signature Manifest selector boundary without adding
+  any cryptographic claim. A relationship-transform selector is now counted as
+  declared package scope only when it is immediately followed by one of OPC's
+  two XML C14N transforms; a missing, reordered, or unsupported next transform
+  fails closed into the existing redacted `FF010` / `FF050` coverage path.
+- Add regressions for a same-count `RelationshipReference/@SourceId` retarget,
+  the missing-C14N failure path, and C14N-with-comments. Selector values,
+  relationship IDs, digest material, and signature material remain private.
+
 ## 0.222.0 — 2026-08-02
 
 - Add a privacy-safe structural audit of OPC XML-signature package manifests.

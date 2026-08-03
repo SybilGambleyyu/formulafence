@@ -170,6 +170,7 @@ from .helpers import (
     change_office_web_addin_worksheet_binding,
     change_package_signature_certificate_payload,
     change_package_signature_reference,
+    change_package_signature_relationship_manifest_source_id,
     change_pivot_table_definition_material,
     change_pivot_table_refresh_control,
     change_power_pivot_data_model_declaration,
@@ -500,6 +501,7 @@ from .helpers import (
     rewrite_xlm_macro_sheet_internal_target_spelling,
     set_chart_formula_external_workbook_target,
     set_external_data_connection_defaults,
+    set_package_signature_relationship_manifest_canonicalization,
     set_power_pivot_data_model_equivalent_guids,
     set_python_in_excel_formula_source,
     set_sheet_protection_defaults,
@@ -18231,6 +18233,109 @@ def test_package_signature_manifest_relationship_coverage_is_profiled_and_redact
         "/_rels/.rels?ContentType=",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_package_signature_relationship_selector_retarget_is_detected_with_same_counts(
+    tmp_path,
+) -> None:
+    """A private selector value change must not disappear behind equal counts."""
+
+    baseline = make_digital_signature_model(tmp_path / "baseline.xlsx")
+    candidate = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    add_package_signature_relationship_manifest_reference(baseline)
+    add_package_signature_relationship_manifest_reference(candidate)
+    with ZipFile(candidate) as archive:
+        root_relationships = ElementTree.fromstring(archive.read("_rels/.rels"))
+    office_document_relationships = [
+        relationship
+        for relationship in root_relationships
+        if relationship.get("Type", "").endswith("/officeDocument")
+    ]
+    assert len(office_document_relationships) == 1
+    office_document_id = office_document_relationships[0].get("Id")
+    assert isinstance(office_document_id, str)
+    change_package_signature_relationship_manifest_source_id(
+        candidate, office_document_id
+    )
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+
+    assert baseline_snapshot.cells == candidate_snapshot.cells
+    assert (
+        baseline_snapshot.digital_signatures.package_signature_coverage.to_dict()
+        == candidate_snapshot.digital_signatures.package_signature_coverage.to_dict()
+    )
+    assert change.details["package_signature_material_changed"] is True
+    assert change.details["package_signature_manifest_coverage_changed"] is True
+    assert "FF050" in {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(baseline_snapshot)),
+        json.dumps(profile_snapshot(candidate_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "rIdFencePackageSignatureOrigin",
+        office_document_id,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_package_signature_relationship_transform_requires_following_c14n(tmp_path) -> None:
+    """Selector counts are trusted only after OPC's required C14N step."""
+
+    baseline = make_digital_signature_model(tmp_path / "baseline.xlsx")
+    candidate = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    add_package_signature_relationship_manifest_reference(baseline)
+    add_package_signature_relationship_manifest_reference(candidate)
+    set_package_signature_relationship_manifest_canonicalization(candidate, None)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    coverage = candidate_snapshot.digital_signatures.package_signature_coverage
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "digital_signature_controls_changed"
+    )
+
+    assert coverage.relationship_reference_count == 0
+    assert coverage.relationship_group_reference_count == 0
+    assert coverage.unrecognized_reference_count >= 1
+    assert any(
+        "malformed or unsupported digital-signature metadata" in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["package_signature_manifest_coverage_changed"] is True
+    assert change.details["unrecognized_digital_signature_metadata_changed"] is True
+    assert {"FF010", "FF050"} <= {finding.rule_id for finding in report.findings}
+
+
+def test_package_signature_relationship_transform_accepts_c14n_with_comments(tmp_path) -> None:
+    """Both OPC C14N forms retain selector coverage without transform execution."""
+
+    candidate = make_digital_signature_model(tmp_path / "candidate.xlsx")
+    add_package_signature_relationship_manifest_reference(candidate)
+    set_package_signature_relationship_manifest_canonicalization(
+        candidate,
+        "http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments",
+    )
+
+    coverage = load_snapshot(candidate).digital_signatures.package_signature_coverage
+
+    assert coverage.relationship_reference_count == 1
+    assert coverage.relationship_group_reference_count == 1
+    assert coverage.unrecognized_reference_count == 0
 
 
 def test_malformed_package_signature_manifest_reference_fails_closed_and_is_redacted(

@@ -3099,6 +3099,83 @@ def add_package_signature_relationship_manifest_reference(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".package-signature-relationship-manifest.tmp.xlsx")
 
 
+def set_package_signature_relationship_manifest_canonicalization(
+    path: Path,
+    algorithm: str | None,
+) -> Path:
+    """Set or remove the C14N transform after one fixture selector transform."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _digital_signature_xml_root(contents)
+        transforms = root.find(
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Object/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Manifest/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transforms"
+        )
+        if transforms is None:
+            raise ValueError("Fixture package signature has no manifest transforms")
+        transform_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transform"
+        transform_elements = transforms.findall(transform_tag)
+        relationship_indexes = [
+            index
+            for index, element in enumerate(transform_elements)
+            if element.get("Algorithm") == _OPC_RELATIONSHIP_TRANSFORM
+        ]
+        if len(relationship_indexes) != 1:
+            raise ValueError("Fixture package signature has no unique relationship transform")
+        canonicalization_index = relationship_indexes[0] + 1
+        if canonicalization_index >= len(transform_elements):
+            raise ValueError("Fixture package signature has no C14N transform")
+        canonicalization = transform_elements[canonicalization_index]
+        if algorithm is None:
+            transforms.remove(canonicalization)
+        else:
+            canonicalization.set("Algorithm", algorithm)
+        contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-c14n.tmp.xlsx")
+
+
+def change_package_signature_relationship_manifest_source_id(
+    path: Path,
+    source_id: str,
+) -> Path:
+    """Retarget one relationship selector without changing its public count."""
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _digital_signature_xml_root(contents)
+        relationship_transform = root.find(
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Object/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Manifest/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transforms/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transform"
+        )
+        if (
+            relationship_transform is None
+            or relationship_transform.get("Algorithm") != _OPC_RELATIONSHIP_TRANSFORM
+        ):
+            raise ValueError("Fixture package signature has no relationship transform")
+        references = relationship_transform.findall(
+            f"{{{_OPC_DIGITAL_SIGNATURE_NS}}}RelationshipReference"
+        )
+        if len(references) != 1:
+            raise ValueError("Fixture package signature has no unique relationship selector")
+        references[0].set("SourceId", source_id)
+        contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-selector.tmp.xlsx")
+
+
 def corrupt_package_signature_manifest_reference(path: Path) -> Path:
     """Make a signature-manifest URI unsafe without following it."""
     def mutate(contents: dict[str, bytes]) -> None:

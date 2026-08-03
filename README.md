@@ -41,7 +41,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.222.0/formulafence-0.222.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.223.0/formulafence-0.223.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -530,7 +530,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.222.0
+  uses: SybilGambleyyu/formulafence@v0.223.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2878,6 +2878,14 @@ package material: directly declared workbook, worksheet, VBA-project, and
 external-data connection parts, plus relationship-transform ID and type-group
 selectors. A material change emits `FF050`; enable
 `no_digital_signature_changes` to make that boundary `FFP050` in CI.
+
+For a selector-bearing Relationships Transform, FormulaFence treats the
+selectors as declared package scope only when the immediately following
+transform is OPC's XML C14N form, with or without comments. A missing,
+reordered, or unsupported next transform is an explicit malformed-metadata
+coverage condition. This is structural validation of the narrow transform
+sequence, not transform execution, digest calculation, or signature
+verification.
 
 Profiles and `FF050` details expose only aggregate origin/XML-signature,
 `SignedInfo`-reference, package-manifest/direct-part/relationship-selector,

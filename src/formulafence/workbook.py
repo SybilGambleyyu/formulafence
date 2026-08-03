@@ -618,6 +618,12 @@ _OPC_DIGITAL_SIGNATURE_NS = (
     "http://schemas.openxmlformats.org/package/2006/digital-signature"
 )
 _OPC_RELATIONSHIP_TRANSFORM = f"{_OPC_DIGITAL_SIGNATURE_NS}/RelationshipTransform"
+_OPC_RELATIONSHIP_TRANSFORM_CANONICALIZATION_ALGORITHMS = frozenset(
+    {
+        "http://www.w3.org/TR/2001/REC-xml-c14n-20010315",
+        "http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments",
+    }
+)
 _RICH_DATA_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"
 _RICH_DATA_2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata2"
 _RICH_DATA_WEB_IMAGE_NS = (
@@ -38905,10 +38911,13 @@ def _package_signature_manifest_coverage(
             if transform_elements
             else []
         )
-        relationship_transforms = [
-            transform
-            for transform in transforms
+        relationship_transform_indexes = [
+            index
+            for index, transform in enumerate(transforms)
             if transform.get("Algorithm") == _OPC_RELATIONSHIP_TRANSFORM
+        ]
+        relationship_transforms = [
+            transforms[index] for index in relationship_transform_indexes
         ]
         if not relationship_transforms:
             coverage_entries.append(
@@ -38932,6 +38941,19 @@ def _package_signature_manifest_coverage(
 
         if len(relationship_transforms) != 1:
             issue("invalid-package-signature-relationship-transform-count", uri)
+            continue
+        relationship_transform_index = relationship_transform_indexes[0]
+        if (
+            relationship_transform_index + 1 >= len(transforms)
+            or transforms[relationship_transform_index + 1].get("Algorithm")
+            not in _OPC_RELATIONSHIP_TRANSFORM_CANONICALIZATION_ALGORITHMS
+        ):
+            # OPC requires a Relationships Transform to be followed immediately
+            # by XML C14N (with or without comments).  This is a bounded
+            # structural prerequisite for treating its selectors as declared
+            # package scope, not an attempt to execute transforms or validate a
+            # digest or signature.
+            issue("invalid-package-signature-relationship-transform-sequence", uri)
             continue
         if not _is_opc_relationship_member(target):
             issue("relationship-transform-on-non-relationship-part", uri)

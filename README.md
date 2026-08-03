@@ -41,7 +41,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.220.0/formulafence-0.220.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.221.0/formulafence-0.221.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -530,7 +530,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.220.0
+  uses: SybilGambleyyu/formulafence@v0.221.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1321,11 +1321,17 @@ and pivot-cache source and refresh controls. This catches a workbook that can
 change its inputs on open or during use even when its ordinary formulas did not
 change. Profiles and reports intentionally omit connection names and
 descriptions, paths, URLs, connection strings, commands, parameter values, SSO
-identifiers, cached records, and opaque extension XML; private fingerprints
-still expose a material source or identity change. Any change emits `FF023`;
-enable `no_external_data_connection_changes` for `FFP023`. FormulaFence never
-opens a connection or refreshes data, does not assess source trust or actual
-returned values, or calculate a PivotTable report. The scope follows Microsoft's
+identifiers, cached records, and opaque extension XML. When a stable,
+uniquely identified connection changes, its `FF023` details add only the
+redacted `source_material_change_categories` that changed—connection/source
+file, SSO identifier, database connection/command/configuration, OLAP or
+text-import configuration, parameter bindings, or web-query URL/request/
+configuration. It never serializes a raw source value or a digest; added,
+removed, re-numbered, or ambiguous connections retain the broad private signal
+without a guessed category. Any change emits `FF023`; enable
+`no_external_data_connection_changes` for `FFP023`. FormulaFence never opens a
+connection or refreshes data, does not assess source trust or actual returned
+values, or calculate a PivotTable report. The scope follows Microsoft's
 [external-data refresh guidance](https://support.microsoft.com/en-us/excel/refresh-an-external-data-connection-in-excel)
 and the [SpreadsheetML Connections part](https://c-rex.net/samples/ooxml/e1/Part1/OOXML_P1_Fundamentals_Connections_topic_ID0EQLGK.html).
 

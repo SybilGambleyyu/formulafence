@@ -6378,6 +6378,36 @@ def change_external_data_refresh_controls(path: Path) -> Path:
     return _rewrite_archive(path, mutate, ".external-data-change.tmp.xlsx")
 
 
+def change_external_data_web_query_url(path: Path) -> Path:
+    """Retarget only the private URL on the synthetic web connection."""
+    spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        connections = ElementTree.fromstring(contents["xl/connections.xml"])
+        connection_tag = f"{{{spreadsheet}}}connection"
+        connection = next(
+            (
+                item
+                for item in connections.findall(connection_tag)
+                if item.get("id") == "2"
+            ),
+            None,
+        )
+        if connection is None:
+            raise ValueError("Fixture does not contain the web connection")
+        web_properties = connection.find(f"{{{spreadsheet}}}webPr")
+        if web_properties is None:
+            raise ValueError("Fixture does not contain web connection properties")
+        web_properties.set("url", "https://private.example/changed-synthetic-web-query")
+        contents["xl/connections.xml"] = ElementTree.tostring(
+            connections,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".external-data-web-url.tmp.xlsx")
+
+
 def set_external_data_connection_defaults(path: Path, *, explicit: bool) -> Path:
     """Toggle omitted versus explicit defaults on the fixture's web connection."""
     spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"

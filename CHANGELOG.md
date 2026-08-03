@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.221.0 — 2026-08-02
+
+- Make the existing high-severity `FF023` connection-source signal more
+  actionable without weakening redaction. When one stable, uniquely identified
+  connection changes, `external_data_connections_changed` now carries the
+  safe `source_material_change_categories` labels that changed: connection or
+  source file, SSO identifier, database connection/command/configuration,
+  OLAP/text-import configuration, parameter bindings, or web-query URL,
+  request, or configuration.
+- Continue to withhold every path, URL, connection string, command, parameter,
+  SSO value, and private digest. Added/removed/re-numbered or ambiguously
+  identified connections retain the broad private source-configuration signal
+  without a guessed category.
+- Add redaction regressions for a web-query URL retarget and multi-control
+  source changes. JSON, Markdown, SARIF, and profiles contain the category
+  only, never either source value.
+
 ## 0.220.0 — 2026-08-02
 
 - Add high-severity `FF117` for a material raw workbook serial-date-system

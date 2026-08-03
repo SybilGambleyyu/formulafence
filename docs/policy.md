@@ -339,11 +339,15 @@ linked query-table refresh and growth behavior; and pivot-cache source and
 refresh settings. Omitted schema defaults compare equal to their explicit
 spelling. Connection names/descriptions, paths, URLs, connection strings,
 commands, parameter values, SSO IDs, cached records, and opaque extension XML
-never appear in profiles or reports; private fingerprints still expose material
-source or identity changes. Any such control change emits `FF023`; enable
-`no_external_data_connection_changes` to make it `FFP023` in CI. FormulaFence
-does not execute a connection, refresh workbook data, determine source trust,
-or calculate a PivotTable report.
+never appear in profiles or reports. For a stable, uniquely identified
+connection, `FF023` can name the changed redacted material class—file, SSO
+identifier, database connection/command/configuration, OLAP/text import,
+parameters, or web-query URL/request/configuration—without returning a value
+or digest. Added, removed, re-numbered, or ambiguous connections keep the
+broad private source/identity signal without a guessed class. Any such control
+change emits `FF023`; enable `no_external_data_connection_changes` to make it
+`FFP023` in CI. FormulaFence does not execute a connection, refresh workbook
+data, determine source trust, or calculate a PivotTable report.
 
 Before privately parsing raw `xl/connections*.xml`, FormulaFence streams each
 Connections part through 32,768-element per-part and 65,536-element complete

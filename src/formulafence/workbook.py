@@ -11112,6 +11112,183 @@ def _connection_source_configuration_signature(
     return _private_external_data_signature(tuple(entries))
 
 
+def _private_external_data_attribute_signature(
+    element: ElementTree.Element,
+    attribute: str,
+) -> str | None:
+    """Fingerprint one sensitive attribute without retaining its value."""
+    value = element.get(attribute)
+    if value is None:
+        return None
+    return _private_external_data_signature(((attribute, value),))
+
+
+def _private_external_data_child_attribute_signature(
+    element: ElementTree.Element,
+    child_name: str,
+    attributes: frozenset[str],
+) -> str | None:
+    """Fingerprint selected child attributes without exposing any source text."""
+    entries: list[tuple[str, str]] = []
+    matching_children = [child for child in element if _xml_local_name(child.tag) == child_name]
+    for index, child in enumerate(matching_children):
+        for attribute in sorted(attributes):
+            if (value := child.get(attribute)) is not None:
+                entries.append((f"child:{index}:{attribute}", value))
+    return _private_external_data_signature(tuple(entries))
+
+
+def _external_data_filtered_xml_fragment(
+    element: ElementTree.Element,
+    *,
+    omit_root_attributes: frozenset[str],
+) -> tuple[object, ...]:
+    """Return a private canonical fragment with selected root fields omitted.
+
+    The caller passes this only to a private SHA-256 helper.  It exists so a
+    changed database command, for example, does not also produce the broad
+    ``database_configuration`` category merely because both live in ``dbPr``.
+    """
+
+    def fragment(
+        node: ElementTree.Element,
+        *,
+        omit_attributes: frozenset[str],
+    ) -> tuple[object, ...]:
+        attributes = tuple(
+            sorted(
+                (
+                    _xml_display_name(attribute),
+                    value,
+                )
+                for attribute, value in node.attrib.items()
+                if _xml_local_name(attribute) not in omit_attributes
+            )
+        )
+        children = tuple(
+            fragment(child, omit_attributes=frozenset()) for child in node
+        )
+        return (_xml_display_name(node.tag), attributes, node.text or "", children)
+
+    return fragment(element, omit_attributes=omit_root_attributes)
+
+
+def _private_external_data_filtered_child_signature(
+    element: ElementTree.Element,
+    child_name: str,
+    *,
+    omit_root_attributes: frozenset[str],
+) -> str | None:
+    """Fingerprint a child configuration after excluding named sub-fields."""
+    matching_children = [child for child in element if _xml_local_name(child.tag) == child_name]
+    entries = tuple(
+        (
+            f"child:{index}:{_xml_display_name(child.tag)}",
+            repr(
+                _external_data_filtered_xml_fragment(
+                    child,
+                    omit_root_attributes=omit_root_attributes,
+                )
+            ),
+        )
+        for index, child in enumerate(matching_children)
+    )
+    return _private_external_data_signature(entries)
+
+
+def _connection_source_material_signatures(
+    element: ElementTree.Element,
+) -> tuple[tuple[str, str | None], ...]:
+    """Return private, redaction-safe source-material category fingerprints.
+
+    These fixed labels are intentionally coarser than the underlying OOXML:
+    they make a review actionable without disclosing the endpoint, query, or
+    parameter that changed.  ``source_configuration_signature`` remains the
+    complete private change detector, so a source edit outside this narrow
+    taxonomy is still visible even if no category can be assigned.
+    """
+    return (
+        ("connection_file", _private_external_data_attribute_signature(element, "odcFile")),
+        (
+            "database_command",
+            _private_external_data_child_attribute_signature(
+                element,
+                "dbPr",
+                frozenset({"command", "commandType"}),
+            ),
+        ),
+        (
+            "database_configuration",
+            _private_external_data_filtered_child_signature(
+                element,
+                "dbPr",
+                omit_root_attributes=frozenset({"connection", "command", "commandType"}),
+            ),
+        ),
+        (
+            "database_connection",
+            _private_external_data_child_attribute_signature(
+                element,
+                "dbPr",
+                frozenset({"connection"}),
+            ),
+        ),
+        (
+            "olap_configuration",
+            _private_external_data_filtered_child_signature(
+                element,
+                "olapPr",
+                omit_root_attributes=frozenset(),
+            ),
+        ),
+        (
+            "parameter_bindings",
+            _private_external_data_filtered_child_signature(
+                element,
+                "parameters",
+                omit_root_attributes=frozenset(),
+            ),
+        ),
+        (
+            "single_sign_on_identifier",
+            _private_external_data_attribute_signature(element, "singleSignOnId"),
+        ),
+        ("source_file", _private_external_data_attribute_signature(element, "sourceFile")),
+        (
+            "text_import_configuration",
+            _private_external_data_filtered_child_signature(
+                element,
+                "textPr",
+                omit_root_attributes=frozenset(),
+            ),
+        ),
+        (
+            "web_query_configuration",
+            _private_external_data_filtered_child_signature(
+                element,
+                "webPr",
+                omit_root_attributes=frozenset({"url", "post", "editPage"}),
+            ),
+        ),
+        (
+            "web_query_request",
+            _private_external_data_child_attribute_signature(
+                element,
+                "webPr",
+                frozenset({"post", "editPage"}),
+            ),
+        ),
+        (
+            "web_query_url",
+            _private_external_data_child_attribute_signature(
+                element,
+                "webPr",
+                frozenset({"url"}),
+            ),
+        ),
+    )
+
+
 def _connection_snapshot(
     element: ElementTree.Element,
     warnings: set[str],
@@ -11265,6 +11442,7 @@ def _connection_snapshot(
         parameters_refresh_on_change=parameters_refresh_on_change,
         identity_signature=_connection_identity_signature(element),
         source_configuration_signature=_connection_source_configuration_signature(element),
+        source_material_signatures=_connection_source_material_signatures(element),
         opaque_metadata=_external_data_opaque_metadata(
             element,
             known_attributes=frozenset(

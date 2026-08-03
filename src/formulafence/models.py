@@ -760,7 +760,13 @@ class WorkbookDateSystemSnapshot:
 
 @dataclass(frozen=True)
 class ExternalDataConnectionSnapshot:
-    """One OOXML external-data connection without its source material."""
+    """One OOXML external-data connection without its source material.
+
+    ``source_material_signatures`` is a private, per-category companion to
+    ``source_configuration_signature``.  It lets a comparison say which
+    class of source material changed without serializing a path, URL,
+    connection string, command, parameter, or identity value.
+    """
 
     connection_id: int | None
     source_type: str
@@ -786,6 +792,9 @@ class ExternalDataConnectionSnapshot:
     parameters_refresh_on_change: int = 0
     identity_signature: str | None = field(default=None, repr=False)
     source_configuration_signature: str | None = field(default=None, repr=False)
+    source_material_signatures: tuple[tuple[str, str | None], ...] = field(
+        default=(), repr=False, compare=False
+    )
     opaque_metadata: ExternalDataOpaqueMetadataSnapshot = field(
         default_factory=ExternalDataOpaqueMetadataSnapshot
     )

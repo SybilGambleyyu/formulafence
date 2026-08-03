@@ -405,6 +405,48 @@ def _private_external_data_material_changed(
     return before != after
 
 
+def _external_data_source_material_change_categories(
+    before: tuple[ExternalDataConnectionSnapshot, ...],
+    after: tuple[ExternalDataConnectionSnapshot, ...],
+) -> list[str]:
+    """Return safe source-material classes that changed on stable connections.
+
+    OOXML connection IDs are the local binding used by QueryTables and pivot
+    caches.  Only a one-to-one, non-null ID match is classified; a connection
+    add, removal, duplicate ID, or re-numbering remains covered by the broader
+    private source-configuration signal without inventing a category.
+    """
+
+    def index_by_id(
+        connections: tuple[ExternalDataConnectionSnapshot, ...],
+    ) -> dict[int, ExternalDataConnectionSnapshot] | None:
+        indexed: dict[int, ExternalDataConnectionSnapshot] = {}
+        for connection in connections:
+            connection_id = connection.connection_id
+            if connection_id is None or connection_id in indexed:
+                return None
+            indexed[connection_id] = connection
+        return indexed
+
+    old_connections = index_by_id(before)
+    new_connections = index_by_id(after)
+    if (
+        old_connections is None
+        or new_connections is None
+        or set(old_connections) != set(new_connections)
+    ):
+        return []
+
+    categories: set[str] = set()
+    for connection_id in sorted(set(old_connections) & set(new_connections)):
+        old_signatures = dict(old_connections[connection_id].source_material_signatures)
+        new_signatures = dict(new_connections[connection_id].source_material_signatures)
+        for category in set(old_signatures) | set(new_signatures):
+            if old_signatures.get(category) != new_signatures.get(category):
+                categories.add(category)
+    return sorted(categories)
+
+
 def _workbook_control_changes(
     before: WorkbookSnapshot, after: WorkbookSnapshot
 ) -> tuple[list[Change], list[Finding]]:
@@ -872,6 +914,11 @@ def _workbook_control_changes(
             ),
         ):
             details["source_configuration_material_changed"] = True
+            if categories := _external_data_source_material_change_categories(
+                old_connections,
+                new_connections,
+            ):
+                details["source_material_change_categories"] = categories
         if _private_external_data_material_changed(
             tuple(connection.opaque_metadata.signature for connection in old_connections),
             tuple(connection.opaque_metadata.signature for connection in new_connections),

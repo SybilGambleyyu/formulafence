@@ -1840,10 +1840,16 @@ formula will produce.
   behavior, and parameter-triggered refreshes; linked query-table refresh and
   growth behavior; and pivot-cache source/refresh settings. Omitted schema
   defaults are normalized. Names, paths, URLs, connection strings, commands,
-  parameter values, SSO IDs, cached records, and opaque extension XML remain
-  private fingerprints; a material change emits `FF023` and can be blocked with
-  `no_external_data_connection_changes`. FormulaFence does **not** connect,
-  refresh data, establish source trust, or calculate/render a PivotTable report.
+parameter values, SSO IDs, cached records, and opaque extension XML remain
+private. For a stable, uniquely identified connection, the `FF023` detail can
+report only a changed material class (file, SSO identifier, database
+connection/command/configuration, OLAP/text import, parameters, or web-query
+URL/request/configuration); it includes neither a value nor a digest. Added,
+removed, re-numbered, or ambiguous connections keep the broader private source
+signal without a guessed class. A material change emits `FF023` and can be
+blocked with `no_external_data_connection_changes`. FormulaFence does **not**
+connect, refresh data, establish source trust, or calculate/render a PivotTable
+report.
 - Before private parsing, raw `xl/connections*.xml` parts are streamed through
   32,768-element per-part and 65,536-element Connections-scan structural
   limits, in addition to 16 MiB per-part, 64 MiB aggregate, and 512-part read

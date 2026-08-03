@@ -5,6 +5,41 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## External-data source-material categories — 2026-08-02
+
+External workbook connections can store provider, server, authentication,
+command, refresh, and web-query material outside worksheet cells. Microsoft's
+[external-connection format documentation](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xls/69df8d03-b6fd-45cd-a0a0-9b026e50a3d9)
+and the Open XML SDK [`WebQueryProperties` reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.webqueryproperties?view=openxml-3.0.0)
+make clear that a changed web-query endpoint is a distinct stored review
+surface. FormulaFence therefore retains the existing private comprehensive
+source-configuration comparison but adds a safe, deliberately coarse category
+to its `FF023` report when a stable uniquely identified connection changes.
+
+The 0.221.0 release test creates a compact relationship-backed web-query
+connection whose identity, type, refresh controls, relationship, content type,
+stored imported cell, ordinary formula path, calculation properties, and every
+other package member remain fixed while only raw `webPr/@url` changes. It
+asserts that the report contains exactly `web_query_url` as the changed source
+category and that neither source value occurs in the profile, JSON, Markdown,
+or SARIF report. The implementation never opens a connection, fetches a URL,
+refreshes data, evaluates a formula, or claims a returned value.
+
+The release-versioned 0.221.0 tree passed **1,591 tests**, `ruff check src
+tests`, `python -m compileall -q src tests`, and `git diff --check`. Its strict
+WCAB 0.37 integration run matched 55 mappable facts across 54 cases, all three
+coverage declarations, and all targeted lint rules; its only unmapped fact was
+WCAB's intentionally unsupported structural formula rewrite. The adapter
+requires the exact high-severity `external_data_connections_changed` / `FF023`
+record plus `source_configuration_material_changed=true` and precisely the
+safe `web_query_url` category. It never serializes a URL, connection string,
+command, parameter, SSO identifier, or private digest.
+
+The 0.221.0 wheel and source distribution both passed `twine check`, installed
+into fresh Python 3.13 environments, reported the release version, and emitted
+the same high-severity `FF023` category for the generated source-transition
+pair. Their JSON reports withheld both endpoint values.
+
 ## Workbook serial-date-system controls — 2026-08-02
 
 Microsoft documents that the workbook `date1904` setting chooses the 1900 or

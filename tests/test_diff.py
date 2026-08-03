@@ -8,6 +8,7 @@ import shutil
 import struct
 import warnings
 import zlib
+from dataclasses import replace
 from xml.etree import ElementTree
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -100,6 +101,7 @@ from .helpers import (
     change_extended_chart_definition_material,
     change_extended_chart_style_payload,
     change_external_data_refresh_controls,
+    change_external_data_web_query_url,
     change_external_link_package_controls,
     change_external_relationship_target,
     change_fill_definition,
@@ -2780,6 +2782,12 @@ def test_external_data_refresh_controls_are_profiled_and_diffed_privately(tmp_pa
     } <= change_kinds
     assert connection_change.details["identity_material_changed"] is True
     assert connection_change.details["source_configuration_material_changed"] is True
+    assert connection_change.details["source_material_change_categories"] == [
+        "connection_file",
+        "database_connection",
+        "single_sign_on_identifier",
+        "source_file",
+    ]
     assert query_table_change.details["identity_material_changed"] is True
     assert pivot_cache_change.details["source_configuration_material_changed"] is True
     assert {finding.rule_id for finding in report.findings} >= {"FF023"}
@@ -2806,6 +2814,61 @@ def test_external_data_refresh_controls_are_profiled_and_diffed_privately(tmp_pa
     )
     for sensitive_value in sensitive_values:
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_external_data_source_categories_identify_a_web_url_without_leaking_it(tmp_path) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    change_external_data_web_query_url(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    connection_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_data_connections_changed"
+    )
+
+    assert connection_change.details["source_configuration_material_changed"] is True
+    assert connection_change.details["source_material_change_categories"] == ["web_query_url"]
+    assert "identity_material_changed" not in connection_change.details
+    sensitive_values = (
+        "https://private.example/synthetic-web-query",
+        "https://private.example/changed-synthetic-web-query",
+    )
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(baseline_snapshot)),
+        profile_to_markdown(profile_snapshot(baseline_snapshot)),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in sensitive_values:
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_external_data_source_categories_remain_broad_when_connection_ids_change(tmp_path) -> None:
+    baseline = make_external_data_refresh_model(tmp_path / "baseline.xlsx")
+    candidate = make_external_data_refresh_model(tmp_path / "candidate.xlsx")
+    change_external_data_web_query_url(candidate)
+
+    baseline_snapshot = load_snapshot(baseline)
+    candidate_snapshot = load_snapshot(candidate)
+    candidate_snapshot = replace(
+        candidate_snapshot,
+        external_data_connections=candidate_snapshot.external_data_connections
+        + (replace(candidate_snapshot.external_data_connections[0], connection_id=99),),
+    )
+    report = compare_snapshots(baseline_snapshot, candidate_snapshot)
+    connection_change = next(
+        change
+        for change in report.changes
+        if change.kind == "external_data_connections_changed"
+    )
+
+    assert connection_change.details["source_configuration_material_changed"] is True
+    assert "source_material_change_categories" not in connection_change.details
 
 
 def test_external_data_connection_defaults_are_canonical(tmp_path) -> None:

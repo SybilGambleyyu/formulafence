@@ -61,6 +61,7 @@ from .helpers import (
     change_rich_data_value,
     change_rich_text_run_color,
     change_scenario_manager_input_value,
+    change_sensitivity_label_custom_property_value,
     change_shared_workbook_revision_controls,
     change_slicer_timeline_filter_material,
     change_table_style_control,
@@ -133,6 +134,7 @@ from .helpers import (
     make_rich_data_model,
     make_rich_text_run_model,
     make_scenario_manager_model,
+    make_sensitivity_label_model,
     make_shared_workbook_revision_model,
     make_slicer_timeline_cache_model,
     make_table_model,
@@ -1460,6 +1462,24 @@ def test_policy_can_block_custom_data_store_changes(tmp_path) -> None:
 
     assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
         "FFP052"
+    }
+
+
+def test_policy_can_block_sensitivity_label_metadata_changes(tmp_path) -> None:
+    baseline = make_sensitivity_label_model(tmp_path / "baseline.xlsx")
+    candidate = make_sensitivity_label_model(tmp_path / "candidate.xlsx")
+    change_sensitivity_label_custom_property_value(candidate)
+
+    report = compare_snapshots(load_snapshot(baseline), load_snapshot(candidate))
+    policy = parse_policy(
+        {
+            "version": 1,
+            "rules": {"no_sensitivity_label_metadata_changes": True},
+        }
+    )
+
+    assert {finding.rule_id for finding in evaluate_policy(report, policy)} >= {
+        "FFP118"
     }
 
 

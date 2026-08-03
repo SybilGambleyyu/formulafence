@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.225.0 — 2026-08-02
+
+- Add high-severity `FF118` for a material stored Office sensitivity-label
+  metadata change, with `no_sensitivity_label_metadata_changes` enforcing the
+  matching `FFP118` policy violation. The dedicated signal coexists with the
+  broader custom-data-store control when `docProps/custom.xml` changes.
+- Recognize only documented label surfaces: the `Sensitivity` custom property,
+  Excel's `MSIP_Label_<GUID>_*` property set, and the package-root
+  `classificationlabels` relationship to a `LabelInfo` `labelList` part.
+  Profiles and reports expose aggregate counts only; label IDs and names,
+  action/site IDs, timestamps, property names/values, XML, relationship IDs,
+  and targets remain private fingerprints.
+- Fail closed for malformed, incomplete, duplicate, unsafe, or unbound label
+  metadata. FormulaFence compares stored declarations only: it does not resolve
+  a label, contact a policy service, determine effective classification,
+  inspect encryption or permissions, infer access rights, or claim Office or
+  storage-service enforcement.
+
 ## 0.224.0 — 2026-08-03
 
 - Recognize ISO/IEC 29500's standard nested protected-range

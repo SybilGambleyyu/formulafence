@@ -191,9 +191,12 @@ from .helpers import (
     change_rich_text_run_color,
     change_rich_text_run_text_only,
     change_scenario_manager_input_value,
+    change_sensitivity_label_custom_property_value,
+    change_sensitivity_label_information_part,
     change_shared_workbook_revision_controls,
     change_shared_workbook_revision_log,
     change_slicer_timeline_filter_material,
+    change_standard_sensitivity_label_id,
     change_strict_worksheet_display_controls,
     change_strict_worksheet_print_layout_controls,
     change_table_direct_dxf_assignment,
@@ -268,8 +271,10 @@ from .helpers import (
     corrupt_rich_data_value_root,
     corrupt_rich_text_run,
     corrupt_scenario_manager_input,
+    corrupt_sensitivity_label_information_root,
     corrupt_shared_workbook_revision,
     corrupt_slicer_timeline_cache_root,
+    corrupt_standard_sensitivity_label_value,
     corrupt_table_style_control,
     corrupt_threaded_comment_root,
     corrupt_what_if_data_table_input,
@@ -299,11 +304,13 @@ from .helpers import (
     externalize_package_signature_relationship,
     externalize_pivot_table_cache_record_relationship,
     externalize_power_pivot_data_model,
+    externalize_sensitivity_label_information_relationship,
     externalize_slicer_timeline_cache_relationship,
     externalize_threaded_comment_relationship,
     externalize_worksheet_image_relationship,
     externalize_worksheet_smartart_diagram_image_relationship,
     externalize_xml_mapping_relationship,
+    keep_standard_sensitivity_label_property_only,
     lowercase_legacy_threaded_placeholder_identifiers,
     make_alignment_model,
     make_border_model,
@@ -373,6 +380,7 @@ from .helpers import (
     make_rich_text_run_model,
     make_scenario_manager_model,
     make_scoped_named_lambda_model,
+    make_sensitivity_label_model,
     make_shared_workbook_revision_model,
     make_slicer_timeline_cache_model,
     make_spill_model,
@@ -434,6 +442,7 @@ from .helpers import (
     normalize_rich_data_relationship_ids,
     normalize_rich_text_run_property_spelling,
     normalize_scenario_manager_reference_spelling,
+    normalize_sensitivity_label_identifiers,
     normalize_shared_workbook_revision_writer_noise,
     normalize_table_style_control_writer_noise,
     normalize_what_if_data_table_reference_spelling,
@@ -19275,6 +19284,243 @@ def test_custom_data_stores_are_profiled_diffed_and_redacted(tmp_path) -> None:
         "PRIVATE-CUSTOM-DOCUMENT-PROPERTY-CANDIDATE",
         "rIdFenceCustomDataPayload",
         "urn:formulafence:private-custom-xml-schema",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_sensitivity_label_metadata_is_profiled_diffed_and_redacted(tmp_path) -> None:
+    baseline = make_sensitivity_label_model(tmp_path / "baseline.xlsx")
+    property_candidate = make_sensitivity_label_model(
+        tmp_path / "property-candidate.xlsx"
+    )
+    label_info_candidate = make_sensitivity_label_model(
+        tmp_path / "label-info-candidate.xlsx"
+    )
+    normalised = make_sensitivity_label_model(tmp_path / "normalised.xlsx")
+    ordinary = make_model(tmp_path / "ordinary.xlsx")
+    change_sensitivity_label_custom_property_value(property_candidate)
+    change_sensitivity_label_information_part(label_info_candidate)
+    normalize_sensitivity_label_identifiers(normalised)
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    markdown = profile_to_markdown(profile)
+    property_snapshot = load_snapshot(property_candidate)
+    label_info_snapshot = load_snapshot(label_info_candidate)
+    property_report = compare_snapshots(baseline_snapshot, property_snapshot)
+    label_info_report = compare_snapshots(baseline_snapshot, label_info_snapshot)
+    normalised_report = compare_snapshots(
+        baseline_snapshot,
+        load_snapshot(normalised),
+    )
+    property_change = next(
+        change
+        for change in property_report.changes
+        if change.kind == "sensitivity_label_metadata_changed"
+    )
+    label_info_change = next(
+        change
+        for change in label_info_report.changes
+        if change.kind == "sensitivity_label_metadata_changed"
+    )
+
+    assert baseline_snapshot.cells == property_snapshot.cells
+    assert baseline_snapshot.cells == label_info_snapshot.cells
+    assert baseline_snapshot.summary()["sensitivity_label_property_count"] == 8
+    assert baseline_snapshot.summary()["sensitivity_label_count"] == 1
+    assert baseline_snapshot.summary()["sensitivity_label_information_part_count"] == 1
+    assert baseline_snapshot.summary()["has_sensitivity_label_metadata"] is True
+    assert profile["sensitivity_labels"] == {
+        "present": True,
+        "custom_property_part_count": 1,
+        "sensitivity_property_count": 1,
+        "msip_label_property_count": 7,
+        "label_id_count": 1,
+        "label_information_part_count": 1,
+        "label_information_relationship_count": 1,
+        "external_label_information_relationship_count": 0,
+        "unrecognized_sensitivity_label_metadata_count": 0,
+    }
+    assert "## Sensitivity-label metadata" in markdown
+    assert property_change.details["sensitivity_label_metadata_material_changed"] is True
+    assert property_change.details["sensitivity_label_custom_properties_changed"] is True
+    assert label_info_change.details["sensitivity_label_metadata_material_changed"] is True
+    assert label_info_change.details["sensitivity_label_information_part_changed"] is True
+    assert "FF118" in {finding.rule_id for finding in property_report.findings}
+    assert "FF118" in {finding.rule_id for finding in label_info_report.findings}
+    assert "FF052" not in {finding.rule_id for finding in label_info_report.findings}
+    assert "sensitivity_label_metadata_changed" not in {
+        change.kind for change in normalised_report.changes
+    }
+    assert "FF118" not in {finding.rule_id for finding in normalised_report.findings}
+    assert load_snapshot(ordinary).sensitivity_labels.to_dict() == {
+        "present": False,
+        "custom_property_part_count": 0,
+        "sensitivity_property_count": 0,
+        "msip_label_property_count": 0,
+        "label_id_count": 0,
+        "label_information_part_count": 0,
+        "label_information_relationship_count": 0,
+        "external_label_information_relationship_count": 0,
+        "unrecognized_sensitivity_label_metadata_count": 0,
+    }
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        markdown,
+        json.dumps(property_report.to_dict()),
+        report_to_markdown(property_report),
+        json.dumps(report_to_sarif(property_report)),
+        json.dumps(label_info_report.to_dict()),
+        report_to_markdown(label_info_report),
+        json.dumps(report_to_sarif(label_info_report)),
+    )
+    for sensitive_value in (
+        "d9f23ae3-a239-45ea-bf23-0123456789ab",
+        "PRIVATE-SENSITIVITY-LABEL-NAME-BASELINE",
+        "PRIVATE-SENSITIVITY-LABEL-NAME-CANDIDATE",
+        "PRIVATE-SENSITIVITY-LABEL-INFO-BASELINE",
+        "PRIVATE-SENSITIVITY-LABEL-INFO-CANDIDATE",
+        "PRIVATE-SENSITIVITY-LABEL-INFO-PAYLOAD-BASELINE",
+        "PRIVATE-SENSITIVITY-LABEL-INFO-PAYLOAD-CANDIDATE",
+        "9808f4bb-209e-4696-8307-00003bb82621",
+        "rIdFenceSensitivityLabelInfo",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_sensitivity_label_metadata_fails_closed_and_is_redacted(tmp_path) -> None:
+    baseline = make_sensitivity_label_model(tmp_path / "baseline.xlsx")
+    candidate = make_sensitivity_label_model(tmp_path / "candidate.xlsx")
+    corrupt_sensitivity_label_information_root(candidate)
+
+    candidate_snapshot = load_snapshot(candidate)
+    profile = profile_snapshot(candidate_snapshot)
+    report = compare_snapshots(load_snapshot(baseline), candidate_snapshot)
+    change = next(
+        change
+        for change in report.changes
+        if change.kind == "sensitivity_label_metadata_changed"
+    )
+
+    assert (
+        candidate_snapshot.sensitivity_labels.unrecognized_sensitivity_label_metadata_count
+        >= 1
+    )
+    assert any(
+        "malformed, unsupported, or incomplete sensitivity-label metadata"
+        in warning
+        for warning in candidate_snapshot.parser_warnings
+    )
+    assert change.details["unrecognized_sensitivity_label_metadata_changed"] is True
+    assert {"FF010", "FF118"} <= {finding.rule_id for finding in report.findings}
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for sensitive_value in (
+        "privateUnexpectedSensitivityLabelInfo",
+        "PRIVATE-SENSITIVITY-LABEL-NAME-BASELINE",
+        "PRIVATE-SENSITIVITY-LABEL-INFO-BASELINE",
+        "PRIVATE-SENSITIVITY-LABEL-INFO-PAYLOAD-BASELINE",
+    ):
+        assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
+
+
+def test_sensitivity_label_marker_and_unsafe_relationship_boundaries(tmp_path) -> None:
+    standard_only_baseline = make_sensitivity_label_model(
+        tmp_path / "standard-only-baseline.xlsx"
+    )
+    standard_only_candidate = make_sensitivity_label_model(
+        tmp_path / "standard-only-candidate.xlsx"
+    )
+    malformed_candidate = make_sensitivity_label_model(
+        tmp_path / "malformed-candidate.xlsx"
+    )
+    external_candidate = make_sensitivity_label_model(
+        tmp_path / "external-candidate.xlsx"
+    )
+    keep_standard_sensitivity_label_property_only(standard_only_baseline)
+    keep_standard_sensitivity_label_property_only(standard_only_candidate)
+    change_standard_sensitivity_label_id(standard_only_candidate)
+    corrupt_standard_sensitivity_label_value(malformed_candidate)
+    externalize_sensitivity_label_information_relationship(external_candidate)
+
+    standard_baseline_snapshot = load_snapshot(standard_only_baseline)
+    standard_candidate_snapshot = load_snapshot(standard_only_candidate)
+    standard_report = compare_snapshots(
+        standard_baseline_snapshot,
+        standard_candidate_snapshot,
+    )
+    standard_change = next(
+        change
+        for change in standard_report.changes
+        if change.kind == "sensitivity_label_metadata_changed"
+    )
+    malformed_snapshot = load_snapshot(malformed_candidate)
+    malformed_report = compare_snapshots(
+        load_snapshot(make_sensitivity_label_model(tmp_path / "malformed-baseline.xlsx")),
+        malformed_snapshot,
+    )
+    external_snapshot = load_snapshot(external_candidate)
+    external_report = compare_snapshots(
+        load_snapshot(make_sensitivity_label_model(tmp_path / "external-baseline.xlsx")),
+        external_snapshot,
+    )
+    external_change = next(
+        change
+        for change in external_report.changes
+        if change.kind == "sensitivity_label_metadata_changed"
+    )
+
+    assert standard_baseline_snapshot.sensitivity_labels.to_dict() == {
+        "present": True,
+        "custom_property_part_count": 1,
+        "sensitivity_property_count": 1,
+        "msip_label_property_count": 0,
+        "label_id_count": 1,
+        "label_information_part_count": 0,
+        "label_information_relationship_count": 0,
+        "external_label_information_relationship_count": 0,
+        "unrecognized_sensitivity_label_metadata_count": 0,
+    }
+    assert standard_change.details["sensitivity_label_custom_properties_changed"] is True
+    assert "FF118" in {finding.rule_id for finding in standard_report.findings}
+    assert (
+        malformed_snapshot.sensitivity_labels.unrecognized_sensitivity_label_metadata_count
+        >= 1
+    )
+    assert "FF118" in {finding.rule_id for finding in malformed_report.findings}
+    assert external_snapshot.sensitivity_labels.external_label_information_relationship_count == 1
+    assert (
+        external_snapshot.sensitivity_labels.unrecognized_sensitivity_label_metadata_count
+        >= 1
+    )
+    assert external_change.details[
+        "sensitivity_label_information_relationships_changed"
+    ] is True
+    assert external_change.details[
+        "unrecognized_sensitivity_label_metadata_changed"
+    ] is True
+
+    rendered_artifacts = (
+        json.dumps(profile_snapshot(standard_candidate_snapshot)),
+        report_to_markdown(standard_report),
+        json.dumps(standard_report.to_dict()),
+        json.dumps(profile_snapshot(malformed_snapshot)),
+        report_to_markdown(malformed_report),
+        json.dumps(malformed_report.to_dict()),
+        json.dumps(profile_snapshot(external_snapshot)),
+        report_to_markdown(external_report),
+        json.dumps(external_report.to_dict()),
+    )
+    for sensitive_value in (
+        "c1d2e3f4-a5b6-4789-8abc-def012345678",
+        "PRIVATE-INVALID-SENSITIVITY-LABEL-ID",
+        "https://private.example/sensitivity-label-info",
     ):
         assert all(sensitive_value not in artifact for artifact in rendered_artifacts)
 

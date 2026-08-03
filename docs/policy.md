@@ -47,6 +47,7 @@ rules:
   no_digital_signature_changes: true
   no_rich_data_changes: true
   no_custom_data_store_changes: true
+  no_sensitivity_label_metadata_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -170,6 +171,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_digital_signature_changes` | boolean | An OPC package signature origin/XML-signature/certificate relationship or payload, XMLDSIG envelope/`SignedInfo` reference, package-manifest declared-part or relationship-selector, or VBA project signature payload/relationship changes. Signature XML, manifest URIs/selectors, certificate identities and contents, binary payloads, relationship IDs, and targets are compared privately; FormulaFence inventories declaration structure but does not validate cryptography or trust. |
 | `no_rich_data_changes` | boolean | An Excel rich-value data/structure/type/array/property-bag/style declaration, provider-associated value, web-image/rich-value relationship, or `XLRICHVALUE` metadata/cell binding changes. Entity values, provider data, field names, identifiers, URLs, image references, relationship IDs, and bound-cell locations are compared privately. |
 | `no_custom_data_store_changes` | boolean | Generic Custom XML data/property/schema material or relationships, workbook-bound Custom Data Properties or opaque binary Custom Data payloads, or custom document properties change. Custom XML, schema URIs, property names/values, storage IDs, binary payloads, relationship IDs, and targets are compared privately. Power Query `DataMashup` remains under `no_power_query_changes`. |
+| `no_sensitivity_label_metadata_changes` | boolean | Stored Office sensitivity-label metadata changes: the documented `Sensitivity` GUID marker, an `MSIP_Label_<GUID>_*` custom property, or a 2020 LabelInfo package part/relationship. Label IDs, label names, action IDs, sites, timestamps, property names/values, XML, relationship IDs, and targets are compared privately. This does not resolve a label or claim encryption, permissions, or enforcement. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
 | `no_threaded_comment_changes` | boolean | A modern Excel threaded-comment/person package binding, comment/reply graph, text, stored cell/timestamp/resolution declaration, mention range/person association, extension material, or person definition changes. Comment bodies, locations, timestamps, parent links, names, user IDs, provider IDs, relationship IDs, and GUIDs are compared privately. |
 | `no_worksheet_drawing_shape_changes` | boolean | A non-chart Worksheet DrawingML regular `xdr:sp`, connector `xdr:cxnSp`, nested `xdr:grpSp`, or recognized SmartArt `xdr:graphicFrame` anchor/layout, presentation, diagram-component or bounded Diagram Data image payload, connector attachment, macro/text-link, or referenced-relationship change. Shape and SmartArt text, formatting, formulas, anchors, IDs, component content, image bytes, and targets are compared privately. Other non-chart graphic-frame URI types are coverage gaps. |
@@ -1656,6 +1658,37 @@ boundary follows Microsoft's guidance on
 [Custom Data Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1f4aa666-c966-4ecf-8399-28390399c891),
 and Excel's
 [CustomDocumentProperties](https://learn.microsoft.com/en-us/office/vba/api/excel.workbook.customdocumentproperties).
+
+Office documents two Excel package surfaces for stored sensitivity-label state:
+the reserved `Sensitivity` custom property containing a label GUID with its
+`MSIP_Label_<GUID>_*` companion metadata, and the newer LabelInfo package part
+reachable through the package-root `classificationlabels` relationship. Those
+surfaces can change without an ordinary cell or formula edit.
+
+FormulaFence reads only those documented property forms and the standard
+LabelInfo relationship/part. Such a stored-metadata change emits `FF118`.
+Enable `no_sensitivity_label_metadata_changes` to block it as `FFP118`.
+`FF052` can also appear when the changed label metadata lives in
+`docProps/custom.xml`, preserving the broader custom-data-store policy
+boundary.
+
+Profiles and findings expose only aggregate label-bearing custom-property,
+standard-marker, MIP-property, distinct-label-ID, LabelInfo-part/relationship,
+external-relationship, and malformed-metadata counts. Label IDs, label names,
+action IDs, sites, timestamps, property names and values, XML, relationship
+IDs, and targets stay private. Writer-selected relationship IDs and custom
+property `pid` values normalize away. Missing, duplicate, malformed, unsafe,
+unbound, unreadable, oversized, or over-budget metadata produces a coverage
+warning; raw reads are bounded to 16 MiB per part, 64 MiB per scan, and 512
+parts before XML materialization.
+
+This policy guards stored package metadata only. FormulaFence does **not**
+resolve a label, contact a policy service, decrypt a package, infer encryption
+or permissions, validate an identity, or claim that a client or storage service
+will apply or enforce metadata. The scope follows Microsoft's
+[Sensitivity Label Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/85388ac6-fb55-4017-828c-2680e3ab22ba)
+and [Sensitivity Label Information Part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c0599e21-b77f-475e-99e0-bd647f60bcbb)
+definitions.
 
 Package/content signatures and VBA project code signatures are separate Excel
 trust surfaces. A workbook can therefore retain identical formulas, values, and

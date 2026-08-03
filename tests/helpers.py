@@ -53,6 +53,13 @@ _CUSTOM_DOCUMENT_PROPERTIES_NS = (
 _DOCUMENT_PROPERTY_TYPES_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 )
+_SENSITIVITY_LABEL_INFORMATION_NS = (
+    "http://schemas.microsoft.com/office/2020/mipLabelMetadata"
+)
+_SENSITIVITY_LABEL_INFORMATION_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2020/02/relationships/"
+    "classificationlabels"
+)
 _SPREADSHEETML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _STRICT_SPREADSHEETML_NS = "http://purl.oclc.org/ooxml/spreadsheetml/main"
 _CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
@@ -4134,6 +4141,377 @@ def corrupt_custom_data_properties_root(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".custom-data-store-corrupt.tmp.xlsx")
+
+
+def make_sensitivity_label_model(path: Path) -> Path:
+    """Create documented Excel sensitivity-label package metadata."""
+    make_model(path)
+
+    baseline_label_id = "d9f23ae3-a239-45ea-bf23-0123456789ab"
+
+    def serialize(root: ElementTree.Element) -> bytes:
+        return ElementTree.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    def add_override(
+        content_types: ElementTree.Element,
+        member: str,
+        content_type: str,
+    ) -> None:
+        ElementTree.SubElement(
+            content_types,
+            f"{{{_CONTENT_TYPES_NS}}}Override",
+            {"PartName": f"/{member}", "ContentType": content_type},
+        )
+
+    def add_property(
+        properties: ElementTree.Element,
+        *,
+        pid: int,
+        name: str,
+        value: str,
+    ) -> None:
+        property_element = ElementTree.SubElement(
+            properties,
+            f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property",
+            {
+                "fmtid": "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}",
+                "pid": str(pid),
+                "name": name,
+            },
+        )
+        ElementTree.SubElement(
+            property_element,
+            f"{{{_DOCUMENT_PROPERTY_TYPES_NS}}}lpwstr",
+        ).text = value
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        root_relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        ElementTree.SubElement(
+            root_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceSensitivityProperties",
+                "Type": f"{_DOCUMENT_RELATIONSHIPS_NS}/custom-properties",
+                "Target": "docProps/custom.xml",
+            },
+        )
+        ElementTree.SubElement(
+            root_relationships,
+            relationship_tag,
+            {
+                "Id": "rIdFenceSensitivityLabelInfo",
+                "Type": _SENSITIVITY_LABEL_INFORMATION_RELATIONSHIP,
+                "Target": "docMetadata/LabelInfo.xml",
+            },
+        )
+        contents["_rels/.rels"] = serialize(root_relationships)
+
+        properties = ElementTree.Element(
+            f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}Properties"
+        )
+        add_property(
+            properties,
+            pid=2,
+            name=f"MSIP_Label_{baseline_label_id}_Enabled",
+            value="true",
+        )
+        add_property(
+            properties,
+            pid=3,
+            name=f"MSIP_Label_{baseline_label_id}_SetDate",
+            value="2026-08-03T12:34:56-0800",
+        )
+        add_property(
+            properties,
+            pid=4,
+            name=f"MSIP_Label_{baseline_label_id}_Method",
+            value="Privileged",
+        )
+        add_property(
+            properties,
+            pid=5,
+            name=f"MSIP_Label_{baseline_label_id}_Name",
+            value="PRIVATE-SENSITIVITY-LABEL-NAME-BASELINE",
+        )
+        add_property(
+            properties,
+            pid=6,
+            name=f"MSIP_Label_{baseline_label_id}_SiteId",
+            value="242d863a-283c-5e0f-ae66-d99e8a20f526",
+        )
+        add_property(
+            properties,
+            pid=7,
+            name=f"MSIP_Label_{baseline_label_id}_ActionId",
+            value="9808f4bb-209e-4696-8307-00003bb82621",
+        )
+        add_property(
+            properties,
+            pid=8,
+            name=f"MSIP_Label_{baseline_label_id}_ContentBits",
+            value="7",
+        )
+        add_property(
+            properties,
+            pid=9,
+            name="Sensitivity",
+            value=baseline_label_id,
+        )
+        contents["docProps/custom.xml"] = serialize(properties)
+
+        label_list = ElementTree.Element(
+            f"{{{_SENSITIVITY_LABEL_INFORMATION_NS}}}labelList"
+        )
+        ElementTree.SubElement(
+            label_list,
+            f"{{{_SENSITIVITY_LABEL_INFORMATION_NS}}}label",
+            {
+                "id": baseline_label_id,
+                "name": "PRIVATE-SENSITIVITY-LABEL-INFO-BASELINE",
+                "enabled": "true",
+            },
+        ).text = "PRIVATE-SENSITIVITY-LABEL-INFO-PAYLOAD-BASELINE"
+        contents["docMetadata/LabelInfo.xml"] = serialize(label_list)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        add_override(
+            content_types,
+            "docProps/custom.xml",
+            "application/vnd.openxmlformats-officedocument.custom-properties+xml",
+        )
+        add_override(
+            content_types,
+            "docMetadata/LabelInfo.xml",
+            "application/xml",
+        )
+        contents["[Content_Types].xml"] = serialize(content_types)
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-model.tmp.xlsx")
+
+
+def change_sensitivity_label_custom_property_value(path: Path) -> Path:
+    """Change a private MIP custom-property value without changing cells."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        properties = ElementTree.fromstring(contents["docProps/custom.xml"])
+        property_tag = f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property"
+        value_tag = f"{{{_DOCUMENT_PROPERTY_TYPES_NS}}}lpwstr"
+        property_element = next(
+            (
+                candidate
+                for candidate in properties.findall(property_tag)
+                if (candidate.get("name") or "").endswith("_Name")
+            ),
+            None,
+        )
+        if property_element is None:
+            raise ValueError("Fixture does not contain a MIP label-name property")
+        value = property_element.find(value_tag)
+        if value is None:
+            raise ValueError("Fixture MIP label-name property lacks a string value")
+        value.text = "PRIVATE-SENSITIVITY-LABEL-NAME-CANDIDATE"
+        contents["docProps/custom.xml"] = ElementTree.tostring(
+            properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-property-change.tmp.xlsx")
+
+
+def change_sensitivity_label_information_part(path: Path) -> Path:
+    """Change private LabelInfo XML without changing custom properties or cells."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        label_list = ElementTree.fromstring(contents["docMetadata/LabelInfo.xml"])
+        label = label_list.find(f"{{{_SENSITIVITY_LABEL_INFORMATION_NS}}}label")
+        if label is None:
+            raise ValueError("Fixture does not contain a LabelInfo label element")
+        label.set("name", "PRIVATE-SENSITIVITY-LABEL-INFO-CANDIDATE")
+        label.text = "PRIVATE-SENSITIVITY-LABEL-INFO-PAYLOAD-CANDIDATE"
+        contents["docMetadata/LabelInfo.xml"] = ElementTree.tostring(
+            label_list,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-info-change.tmp.xlsx")
+
+
+def change_standard_sensitivity_label_id(path: Path) -> Path:
+    """Change only the standard ``Sensitivity`` GUID marker."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        properties = ElementTree.fromstring(contents["docProps/custom.xml"])
+        property_tag = f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property"
+        value_tag = f"{{{_DOCUMENT_PROPERTY_TYPES_NS}}}lpwstr"
+        property_element = next(
+            (
+                candidate
+                for candidate in properties.findall(property_tag)
+                if candidate.get("name") == "Sensitivity"
+            ),
+            None,
+        )
+        if property_element is None:
+            raise ValueError("Fixture does not contain a Sensitivity property")
+        value = property_element.find(value_tag)
+        if value is None:
+            raise ValueError("Fixture Sensitivity property lacks a string value")
+        value.text = "c1d2e3f4-a5b6-4789-8abc-def012345678"
+        contents["docProps/custom.xml"] = ElementTree.tostring(
+            properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-id-change.tmp.xlsx")
+
+
+def corrupt_standard_sensitivity_label_value(path: Path) -> Path:
+    """Corrupt the documented label GUID marker to exercise coverage handling."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        properties = ElementTree.fromstring(contents["docProps/custom.xml"])
+        property_tag = f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property"
+        value_tag = f"{{{_DOCUMENT_PROPERTY_TYPES_NS}}}lpwstr"
+        property_element = next(
+            (
+                candidate
+                for candidate in properties.findall(property_tag)
+                if candidate.get("name") == "Sensitivity"
+            ),
+            None,
+        )
+        if property_element is None:
+            raise ValueError("Fixture does not contain a Sensitivity property")
+        value = property_element.find(value_tag)
+        if value is None:
+            raise ValueError("Fixture Sensitivity property lacks a string value")
+        value.text = "PRIVATE-INVALID-SENSITIVITY-LABEL-ID"
+        contents["docProps/custom.xml"] = ElementTree.tostring(
+            properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-id-corrupt.tmp.xlsx")
+
+
+def keep_standard_sensitivity_label_property_only(path: Path) -> Path:
+    """Leave one documented Sensitivity marker without MIP or LabelInfo peers."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        properties = ElementTree.fromstring(contents["docProps/custom.xml"])
+        for property_element in tuple(
+            properties.findall(f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property")
+        ):
+            if (property_element.get("name") or "").startswith("MSIP_Label_"):
+                properties.remove(property_element)
+        contents["docProps/custom.xml"] = ElementTree.tostring(
+            properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        relationship_tag = f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+        for relationship in tuple(relationships.findall(relationship_tag)):
+            if (
+                (relationship.get("Type") or "").casefold()
+                == _SENSITIVITY_LABEL_INFORMATION_RELATIONSHIP.casefold()
+            ):
+                relationships.remove(relationship)
+        contents["_rels/.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+        contents.pop("docMetadata/LabelInfo.xml", None)
+
+        content_types = ElementTree.fromstring(contents["[Content_Types].xml"])
+        override_tag = f"{{{_CONTENT_TYPES_NS}}}Override"
+        for override in tuple(content_types.findall(override_tag)):
+            if override.get("PartName") == "/docMetadata/LabelInfo.xml":
+                content_types.remove(override)
+        contents["[Content_Types].xml"] = ElementTree.tostring(
+            content_types,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-standard-only.tmp.xlsx")
+
+
+def externalize_sensitivity_label_information_relationship(path: Path) -> Path:
+    """Make the LabelInfo relationship unsafe without exposing its target."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        relationship = next(
+            (
+                candidate
+                for candidate in relationships.findall(
+                    f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"
+                )
+                if (
+                    (candidate.get("Type") or "").casefold()
+                    == _SENSITIVITY_LABEL_INFORMATION_RELATIONSHIP.casefold()
+                )
+            ),
+            None,
+        )
+        if relationship is None:
+            raise ValueError("Fixture does not contain a LabelInfo relationship")
+        relationship.set("TargetMode", "External")
+        relationship.set("Target", "https://private.example/sensitivity-label-info")
+        contents["_rels/.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-external.tmp.xlsx")
+
+
+def normalize_sensitivity_label_identifiers(path: Path) -> Path:
+    """Rewrite writer-assigned relationship and property IDs only."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        relationships = ElementTree.fromstring(contents["_rels/.rels"])
+        for index, relationship in enumerate(
+            relationships.findall(f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationship"),
+            start=901,
+        ):
+            if (relationship.get("Id") or "").startswith("rIdFenceSensitivity"):
+                relationship.set("Id", f"rIdFenceSensitivityNormalised{index}")
+        contents["_rels/.rels"] = ElementTree.tostring(
+            relationships,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+        properties = ElementTree.fromstring(contents["docProps/custom.xml"])
+        for index, property_element in enumerate(
+            properties.findall(f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property"),
+            start=901,
+        ):
+            property_element.set("pid", str(index))
+        contents["docProps/custom.xml"] = ElementTree.tostring(
+            properties,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-ids.tmp.xlsx")
+
+
+def corrupt_sensitivity_label_information_root(path: Path) -> Path:
+    """Corrupt LabelInfo XML to exercise fail-closed coverage."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        label_list = ElementTree.fromstring(contents["docMetadata/LabelInfo.xml"])
+        label_list.tag = "privateUnexpectedSensitivityLabelInfo"
+        contents["docMetadata/LabelInfo.xml"] = ElementTree.tostring(
+            label_list,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".sensitivity-label-info-corrupt.tmp.xlsx")
 
 
 def _workbook_theme_member(contents: dict[str, bytes]) -> str:

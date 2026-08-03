@@ -5,6 +5,39 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Sensitivity-label metadata — 2026-08-02
+
+Microsoft's [Sensitivity Label Information Part specification](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c0599e21-b77f-475e-99e0-bd647f60bcbb)
+defines the package-root `classificationlabels` relationship and `labelList`
+part, while its [custom-document-property interoperability note](https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-offcrypto/13939de6-c833-44ab-b213-e0088bf02341)
+documents the reserved custom-property representation. FormulaFence 0.225.0
+recognizes those stored forms as private comparison material and emits
+`sensitivity_label_metadata_changed` / `FF118` only when its safe aggregate
+profile or private signature changes.
+
+A controlled raw-OOXML pair contains a bound `Sensitivity` property, seven
+`MSIP_Label_<GUID>_*` properties, a root LabelInfo relationship, and one
+`labelList` part. It keeps all safe counts and package relationships equal while
+changing only a synthetic MIP name value. JSON, Markdown, and SARIF retain the
+aggregate profile and material-change flag but were checked to contain no label
+ID or name, action/site ID, timestamp, property name/value, XML, relationship
+ID, or target. Malformed, duplicate, unbound, or unsafe metadata produces
+coverage evidence rather than a guessed label meaning. The feature compares
+stored declarations only: it does not resolve a label, contact a policy service,
+determine effective classification, inspect encryption or permissions, infer
+access, or claim Office or storage-service enforcement.
+
+The release tree passed **1,602 tests** in 110.27 seconds, `ruff check
+src/formulafence tests`, `python -m compileall -q src tests`, and `git diff
+--check`. The staged wheel (SHA-256
+`f72b6bdfa6ca44120f32da72d73570eb762400e9cb9c24251eb108ddd162557c`) and
+source distribution (SHA-256
+`12e7d7e35510b4874a69ebb232428ccf9678b74b7da40cbb0a099f24fc8cb35c`) passed
+`twine check`. Fresh Python 3.13 wheel and source-distribution installations
+reported `FormulaFence 0.225.0`; both emitted `FF118` for the controlled pair,
+and the wheel redaction check excluded every synthetic identifier and label
+value.
+
 ## Standard protected-range security descriptors — 2026-08-03
 
 The ISO/IEC protected-range example stores each editable-account descriptor as

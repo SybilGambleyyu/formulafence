@@ -4785,6 +4785,44 @@ def profile_to_markdown(
             "intentionally omitted. FormulaFence does not execute an add-in, resolve "
             "a property, fetch a target, or interpret a payload."
         )
+    sensitivity_labels = profile["sensitivity_labels"]
+    if sensitivity_labels["present"]:
+        lines.extend(
+            [
+                "",
+                "## Sensitivity-label metadata",
+                "",
+                (
+                    "- **Label-bearing custom-property parts / standard label-ID "
+                    "properties / MIP metadata properties:** "
+                    f"{sensitivity_labels['custom_property_part_count']} / "
+                    f"{sensitivity_labels['sensitivity_property_count']} / "
+                    f"{sensitivity_labels['msip_label_property_count']}"
+                ),
+                (
+                    "- **Distinct label IDs / LabelInfo package parts:** "
+                    f"{sensitivity_labels['label_id_count']} / "
+                    f"{sensitivity_labels['label_information_part_count']}"
+                ),
+                (
+                    "- **LabelInfo relationships / external relationships:** "
+                    f"{sensitivity_labels['label_information_relationship_count']} / "
+                    f"{sensitivity_labels['external_label_information_relationship_count']}"
+                ),
+            ]
+        )
+        if sensitivity_labels["unrecognized_sensitivity_label_metadata_count"]:
+            lines.append(
+                "- **Unrecognized or malformed sensitivity-label metadata:** "
+                f"{sensitivity_labels['unrecognized_sensitivity_label_metadata_count']}"
+            )
+        lines.append(
+            "Label IDs, label names, action IDs, sites, timestamps, property names, "
+            "values, XML, relationship IDs, and targets are compared privately and "
+            "intentionally omitted. FormulaFence does not resolve a label, contact a "
+            "policy service, decrypt a package, infer encryption or access rights, or "
+            "claim that stored metadata is effective in any client or storage service."
+        )
     legacy_comments = profile["legacy_comments"]
     if legacy_comments["present"]:
         lines.extend(

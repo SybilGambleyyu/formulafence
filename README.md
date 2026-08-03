@@ -41,7 +41,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.224.0/formulafence-0.224.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.225.0/formulafence-0.225.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -530,7 +530,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.224.0
+  uses: SybilGambleyyu/formulafence@v0.225.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1094,6 +1094,7 @@ rules:
   no_digital_signature_changes: true
   no_rich_data_changes: true
   no_custom_data_store_changes: true
+  no_sensitivity_label_metadata_changes: true
   no_legacy_comment_changes: true
   no_threaded_comment_changes: true
   no_worksheet_drawing_shape_changes: true
@@ -2862,6 +2863,38 @@ behavior. The scope follows Microsoft's guidance on
 [Custom Data Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1f4aa666-c966-4ecf-8399-28390399c891),
 and Excel's
 [CustomDocumentProperties](https://learn.microsoft.com/en-us/office/vba/api/excel.workbook.customdocumentproperties).
+
+FormulaFence also inventories persisted **sensitivity-label metadata**. Office
+documents that Excel can store an applied label's GUID in the reserved
+`Sensitivity` custom property alongside `MSIP_Label_<GUID>_*` metadata, and
+newer packages can carry a `LabelInfo` part through the standard
+`classificationlabels` package relationship. Each surface can change while
+ordinary cells and formulas remain fixed.
+
+FormulaFence reads only those documented custom-property forms and the package
+root's LabelInfo relationship/part. A material stored-metadata change emits
+`FF118`; enable `no_sensitivity_label_metadata_changes` to make that boundary
+`FFP118` in CI. The generic `FF052` custom-data-store finding can coexist when
+the same custom-property part changes, preserving existing broad persisted
+state review.
+
+Profiles and `FF118` details expose only aggregate custom-property, standard
+label-marker, MIP-property, distinct-label-ID, LabelInfo-part/relationship,
+external-relationship, and malformed-metadata counts. Label IDs, label names,
+action IDs, sites, timestamps, property names and values, XML, relationship
+IDs, and targets never enter profiles, Markdown, JSON, or SARIF. Writer
+relationship IDs and document-property `pid` values normalize away. Missing,
+duplicate, malformed, unsafe, unbound, unreadable, oversized, or over-budget
+metadata becomes a visible coverage warning; raw reads are bounded to 16 MiB
+per part, 64 MiB per scan, and 512 parts before XML materialization.
+
+This is a stored-metadata boundary, not a label-resolution or access-control
+claim. FormulaFence does not resolve a label, contact a policy service, decrypt
+a package, infer encryption or permissions, validate an identity, or claim
+that a client or storage service will apply or enforce metadata. The scope
+follows Microsoft's [Sensitivity Label Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/85388ac6-fb55-4017-828c-2680e3ab22ba)
+and [Sensitivity Label Information Part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c0599e21-b77f-475e-99e0-bd647f60bcbb)
+definitions.
 
 FormulaFence also inventories **digital-signature controls** that can change
 outside ordinary cells and outside the `xl/vbaProject.bin` macro payload.

@@ -61,6 +61,7 @@ from formulafence.models import (
     RichTextRunEntry,
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
+    SensitivityLabelSnapshot,
     SharedWorkbookRevisionSnapshot,
     SlicerTimelineCacheSnapshot,
     TableStyleControlsSnapshot,
@@ -3650,6 +3651,61 @@ def _custom_data_store_controls_changed(
     return [change], [finding]
 
 
+def _sensitivity_label_metadata_changed(
+    before: WorkbookSnapshot,
+    after: WorkbookSnapshot,
+) -> tuple[list[Change], list[Finding]]:
+    """Flag material stored Office label metadata without exposing a label."""
+    old_labels: SensitivityLabelSnapshot = before.sensitivity_labels
+    new_labels: SensitivityLabelSnapshot = after.sensitivity_labels
+    if old_labels == new_labels:
+        return [], []
+
+    details: dict[str, object] = {
+        "before": old_labels.to_dict(),
+        "after": new_labels.to_dict(),
+        "sensitivity_label_metadata_material_changed": True,
+    }
+    if old_labels.custom_property_signature != new_labels.custom_property_signature:
+        details["sensitivity_label_custom_properties_changed"] = True
+    if (
+        old_labels.label_information_signature
+        != new_labels.label_information_signature
+    ):
+        details["sensitivity_label_information_part_changed"] = True
+    if old_labels.relationship_signature != new_labels.relationship_signature:
+        details["sensitivity_label_information_relationships_changed"] = True
+    if (
+        old_labels.unrecognized_sensitivity_label_metadata_count
+        != new_labels.unrecognized_sensitivity_label_metadata_count
+        or (
+            (
+                old_labels.unrecognized_sensitivity_label_metadata_count
+                or new_labels.unrecognized_sensitivity_label_metadata_count
+            )
+            and old_labels.coverage_signature != new_labels.coverage_signature
+        )
+    ):
+        details["unrecognized_sensitivity_label_metadata_changed"] = True
+    change = Change(
+        "sensitivity_label_metadata_changed",
+        None,
+        "high",
+        details=details,
+    )
+    finding = Finding(
+        "FF118",
+        "high",
+        (
+            "Stored sensitivity-label metadata changed; a standard label marker, "
+            "MIP custom-property set, or LabelInfo package part may have been "
+            "added, removed, or altered."
+        ),
+        details=details,
+    )
+    return [change], [finding]
+
+
 def _threaded_comment_controls_changed(
     before: WorkbookSnapshot,
     after: WorkbookSnapshot,
@@ -4155,6 +4211,12 @@ def compare_snapshots(
     )
     changes.extend(custom_data_store_changes)
     findings.extend(custom_data_store_findings)
+
+    sensitivity_label_changes, sensitivity_label_findings = (
+        _sensitivity_label_metadata_changed(before, after)
+    )
+    changes.extend(sensitivity_label_changes)
+    findings.extend(sensitivity_label_findings)
 
     legacy_comment_changes, legacy_comment_findings = _legacy_comment_controls_changed(
         before,

@@ -1654,6 +1654,26 @@ formula will produce.
   [persisting add-in state](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/persisting-add-in-state-and-settings),
   [Custom Data](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/7c53f6f4-fea8-43f7-a4b0-ba6e14d0eb78),
   and [Custom Data Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-xlsx/1f4aa666-c966-4ecf-8399-28390399c891).
+- Office can retain sensitivity-label state outside cells in the reserved
+  `Sensitivity` custom property, its `MSIP_Label_<GUID>_*` companion
+  properties, and a newer package-root `classificationlabels` relationship to
+  a LabelInfo part. FormulaFence recognizes those documented stored-metadata
+  surfaces separately: a material change emits `FF118`, and
+  `no_sensitivity_label_metadata_changes` blocks it as `FFP118`. The profile
+  and report expose aggregate custom-property, marker, MIP-property, label-ID,
+  LabelInfo-part/relationship, external-relationship, and malformed-metadata
+  counts only. Label IDs, names, action IDs, sites, timestamps, property names
+  and values, XML, relationship IDs, and targets remain private; writer
+  relationship IDs and custom-property `pid` values normalize away. Missing,
+  duplicate, malformed, unsafe, unbound, unreadable, oversized, or over-budget
+  data is visible as a coverage gap. This is static package evidence only:
+  FormulaFence does **not** resolve a label, contact a policy service, decrypt
+  a package, infer encryption or permissions, validate an identity, or claim
+  that Office, SharePoint, OneDrive, or any other client/service will apply or
+  enforce metadata. The boundary follows Microsoft's
+  [Sensitivity Label Properties](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/85388ac6-fb55-4017-828c-2680e3ab22ba)
+  and [Sensitivity Label Information Part](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/c0599e21-b77f-475e-99e0-bd647f60bcbb)
+  definitions.
 - OPC package signatures and VBA project signatures are distinct stored
   integrity/provenance surfaces. A workbook can preserve ordinary cells and
   even `xl/vbaProject.bin` while the package-root signature origin, XML signature

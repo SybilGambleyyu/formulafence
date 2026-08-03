@@ -3767,6 +3767,68 @@ class CustomDataStoreSnapshot:
 
 
 @dataclass(frozen=True)
+class SensitivityLabelSnapshot:
+    """Safe aggregate of persisted Office sensitivity-label metadata.
+
+    Microsoft Office can retain sensitivity-label state in a reserved custom
+    property set and, in newer packages, a LabelInfo package part. Label IDs,
+    label names, action IDs, sites, timestamps, property names, values, XML,
+    relationship IDs, and targets remain private fingerprints so a review
+    artifact can establish that stored metadata changed without disclosing the
+    classification itself.
+    """
+
+    custom_property_part_count: int = 0
+    sensitivity_property_count: int = 0
+    msip_label_property_count: int = 0
+    label_id_count: int = 0
+    label_information_part_count: int = 0
+    label_information_relationship_count: int = 0
+    external_label_information_relationship_count: int = 0
+    unrecognized_sensitivity_label_metadata_count: int = 0
+    custom_property_signature: str | None = field(default=None, repr=False)
+    label_information_signature: str | None = field(default=None, repr=False)
+    relationship_signature: str | None = field(default=None, repr=False)
+    coverage_signature: str | None = field(default=None, repr=False)
+
+    @property
+    def present(self) -> bool:
+        return bool(
+            self.custom_property_part_count
+            or self.sensitivity_property_count
+            or self.msip_label_property_count
+            or self.label_id_count
+            or self.label_information_part_count
+            or self.label_information_relationship_count
+            or self.external_label_information_relationship_count
+            or self.unrecognized_sensitivity_label_metadata_count
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return count-only label evidence without stored metadata."""
+        return {
+            "present": self.present,
+            "custom_property_part_count": self.custom_property_part_count,
+            "sensitivity_property_count": self.sensitivity_property_count,
+            "msip_label_property_count": self.msip_label_property_count,
+            "label_id_count": self.label_id_count,
+            "label_information_part_count": self.label_information_part_count,
+            "label_information_relationship_count": (
+                self.label_information_relationship_count
+            ),
+            "external_label_information_relationship_count": (
+                self.external_label_information_relationship_count
+            ),
+            "unrecognized_sensitivity_label_metadata_count": (
+                self.unrecognized_sensitivity_label_metadata_count
+            ),
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class LegacyCommentSnapshot:
     """Safe aggregate of legacy Excel note and placeholder controls.
 
@@ -4562,6 +4624,9 @@ class WorkbookSnapshot:
     custom_data_stores: CustomDataStoreSnapshot = field(
         default_factory=CustomDataStoreSnapshot
     )
+    sensitivity_labels: SensitivityLabelSnapshot = field(
+        default_factory=SensitivityLabelSnapshot
+    )
     legacy_comments: LegacyCommentSnapshot = field(
         default_factory=LegacyCommentSnapshot
     )
@@ -4764,6 +4829,15 @@ class WorkbookSnapshot:
                 self.custom_data_stores.document_custom_property_count
             ),
             "has_custom_data_stores": self.custom_data_stores.present,
+            "sensitivity_label_property_count": (
+                self.sensitivity_labels.sensitivity_property_count
+                + self.sensitivity_labels.msip_label_property_count
+            ),
+            "sensitivity_label_count": self.sensitivity_labels.label_id_count,
+            "sensitivity_label_information_part_count": (
+                self.sensitivity_labels.label_information_part_count
+            ),
+            "has_sensitivity_label_metadata": self.sensitivity_labels.present,
             "legacy_comment_count": self.legacy_comments.comment_count,
             "legacy_comment_author_count": self.legacy_comments.comment_author_count,
             "legacy_comment_note_shape_count": self.legacy_comments.note_shape_count,

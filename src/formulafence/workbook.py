@@ -24,6 +24,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import TypeVar
+from uuid import UUID
 from xml.etree.ElementTree import TreeBuilder as _ElementTreeBuilder
 from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
@@ -125,6 +126,7 @@ from formulafence.models import (
     RichTextRunEntry,
     RichTextRunSnapshot,
     ScenarioManagerSnapshot,
+    SensitivityLabelSnapshot,
     SharedWorkbookRevisionSnapshot,
     SheetProtectionSnapshot,
     SheetSnapshot,
@@ -612,6 +614,12 @@ _CUSTOM_DATA_PROPERTIES_NS = (
 _CUSTOM_DOCUMENT_PROPERTIES_NS = (
     "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 )
+_DOCUMENT_PROPERTY_TYPES_NS = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
+)
+_SENSITIVITY_LABEL_INFORMATION_NS = (
+    "http://schemas.microsoft.com/office/2020/mipLabelMetadata"
+)
 _MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
 _OPC_DIGITAL_SIGNATURE_NS = (
@@ -714,6 +722,20 @@ _CUSTOM_DOCUMENT_PROPERTIES_RELATIONSHIP = (
     f"{_DOCUMENT_RELATIONSHIP_NS}/custom-properties"
 )
 _CUSTOM_DOCUMENT_PROPERTIES_MEMBER = "docProps/custom.xml"
+_SENSITIVITY_LABEL_INFORMATION_RELATIONSHIP = (
+    "http://schemas.microsoft.com/office/2020/02/relationships/"
+    "classificationlabels"
+)
+_SENSITIVITY_LABEL_INFORMATION_MEMBER = "docMetadata/LabelInfo.xml"
+_SENSITIVITY_PROPERTY_NAME = "Sensitivity"
+_SENSITIVITY_LABEL_GUID_PATTERN = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
+_MSIP_LABEL_PROPERTY_PATTERN = re.compile(
+    r"^MSIP_Label_([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})_(.+)$"
+)
 _CUSTOM_DATA_STORE_MAX_PART_BYTES = 16 * 1024 * 1024
 _CUSTOM_DATA_STORE_TOTAL_BYTES = 64 * 1024 * 1024
 _CUSTOM_DATA_STORE_TOTAL_PARTS = 512
@@ -1817,6 +1839,14 @@ class _CustomDataStoreMetadata:
     stores: CustomDataStoreSnapshot
     warnings: tuple[str, ...]
     power_query_item_members: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _SensitivityLabelMetadata:
+    """Raw Office sensitivity-label evidence retained outside cell readers."""
+
+    labels: SensitivityLabelSnapshot
+    warnings: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -42315,6 +42345,7 @@ def _custom_data_store_xml_structure_budget_fallback_signature(
     budget: _CustomDataStoreBudget,
     *,
     report_failure: bool,
+    surface: str = "custom data-store",
 ) -> str | None:
     """Stream custom-state XML before recursively canonicalizing its private tree."""
     try:
@@ -42336,7 +42367,7 @@ def _custom_data_store_xml_structure_budget_fallback_signature(
         return None
     if report_failure:
         warnings.add(
-            "FormulaFence did not fully read a custom data-store XML part whose XML "
+            f"FormulaFence did not fully read a {surface} XML part whose XML "
             "structure exceeds the safety budget; affected persisted state has a "
             "coverage gap."
         )
@@ -42358,12 +42389,13 @@ def _custom_data_store_bounded_payload(
     *,
     report_failure: bool = True,
     structural_xml: bool = False,
+    surface: str = "custom data-store",
 ) -> tuple[bytes | None, str | None]:
     """Read one custom workbook data-store part within fixed scan budgets."""
     if budget.remaining_parts <= 0:
         if report_failure:
             warnings.add(
-                "FormulaFence reached its bounded custom data-store part count "
+                f"FormulaFence reached its bounded {surface} part count "
                 "budget; affected persisted state was not compared."
             )
         return None, _private_external_data_signature(
@@ -42375,7 +42407,7 @@ def _custom_data_store_bounded_payload(
     except KeyError:
         if report_failure:
             warnings.add(
-                "FormulaFence could not locate a custom data-store package part; "
+                f"FormulaFence could not locate a {surface} package part; "
                 "affected persisted state was not compared."
             )
         return None, _private_external_data_signature(
@@ -42385,7 +42417,7 @@ def _custom_data_store_bounded_payload(
     if info.file_size > _CUSTOM_DATA_STORE_MAX_PART_BYTES:
         if report_failure:
             warnings.add(
-                "FormulaFence did not fully read an oversized custom data-store "
+                f"FormulaFence did not fully read an oversized {surface} "
                 "part; affected persisted state has a coverage gap."
             )
         return None, _private_external_data_signature(
@@ -42394,7 +42426,7 @@ def _custom_data_store_bounded_payload(
     if info.file_size > budget.remaining_bytes:
         if report_failure:
             warnings.add(
-                "FormulaFence reached its bounded custom data-store read budget; "
+                f"FormulaFence reached its bounded {surface} read budget; "
                 "affected persisted state was not compared."
             )
         return None, _private_external_data_signature(
@@ -42409,6 +42441,7 @@ def _custom_data_store_bounded_payload(
                 warnings,
                 budget,
                 report_failure=report_failure,
+                surface=surface,
             )
         )
         if structure_fallback_signature is not None:
@@ -42419,7 +42452,7 @@ def _custom_data_store_bounded_payload(
     except (BadZipFile, KeyError, OSError, RuntimeError, ValueError) as error:
         if report_failure:
             warnings.add(
-                "FormulaFence could not read a custom data-store package part "
+                f"FormulaFence could not read a {surface} package part "
                 f"({type(error).__name__}); affected persisted state was not compared."
             )
         return None, _private_external_data_signature(
@@ -42434,6 +42467,7 @@ def _custom_data_store_bounded_root(
     budget: _CustomDataStoreBudget,
     *,
     report_failure: bool = True,
+    surface: str = "custom data-store",
 ) -> tuple[ElementTree.Element | None, str | None]:
     """Return one bounded custom-store XML root or a private failure signature."""
     payload, fallback_signature = _custom_data_store_bounded_payload(
@@ -42443,6 +42477,7 @@ def _custom_data_store_bounded_root(
         budget,
         report_failure=report_failure,
         structural_xml=True,
+        surface=surface,
     )
     if payload is None:
         return None, fallback_signature
@@ -42451,7 +42486,7 @@ def _custom_data_store_bounded_root(
     except (ElementTree.ParseError, OSError, RuntimeError, ValueError) as error:
         if report_failure:
             warnings.add(
-                "FormulaFence could not parse a custom data-store XML package "
+                f"FormulaFence could not parse a {surface} XML package "
                 f"part ({type(error).__name__}); affected persisted state was not compared."
             )
         return None, _private_payload_signature(payload)
@@ -42467,6 +42502,7 @@ def _custom_data_store_part_relationships(
     *,
     required: bool,
     context: str,
+    surface: str = "custom data-store",
 ) -> tuple[_PackageRelationship, ...]:
     """Read a custom-store relationship part without following target endpoints."""
     relationship_member = _relationship_part_path(source_member)
@@ -42483,6 +42519,7 @@ def _custom_data_store_part_relationships(
         relationship_member,
         warnings,
         budget,
+        surface=surface,
     )
     if root is None:
         _custom_data_store_issue(
@@ -43411,6 +43448,460 @@ def _custom_data_store_metadata(path: Path) -> _CustomDataStoreMetadata:
         tuple(sorted(warnings)),
         tuple(sorted(power_query_item_members, key=str.casefold)),
     )
+
+
+def _sensitivity_label_issue(
+    issues: list[tuple[str, str]],
+    context: str,
+    detail: object,
+) -> None:
+    """Record private label-metadata coverage evidence without serialising it."""
+    issues.append((context, repr(detail)))
+
+
+def _canonical_sensitivity_label_guid(value: str | None) -> str | None:
+    """Return one standard label GUID in a spelling-independent private form."""
+    if value is None:
+        return None
+    candidate = value.strip()
+    if candidate.startswith("{") and candidate.endswith("}"):
+        candidate = candidate[1:-1]
+    if not _SENSITIVITY_LABEL_GUID_PATTERN.fullmatch(candidate):
+        return None
+    try:
+        return str(UUID(candidate))
+    except (AttributeError, ValueError):  # pragma: no cover - regex is stricter
+        return None
+
+
+def _sensitivity_label_custom_property_entries(
+    root: ElementTree.Element,
+    issues: list[tuple[str, str]],
+    *,
+    context: str,
+) -> tuple[tuple[tuple[str, str], ...], bool, int, int, frozenset[str]]:
+    """Fingerprint known Office label custom properties without exporting them.
+
+    The Office interoperability specification reserves the ``Sensitivity``
+    property for a label GUID and demonstrates the accompanying
+    ``MSIP_Label_<GUID>_*`` property set for Excel. We keep their labels,
+    suffixes, and values only in a private aggregate signature. Other custom
+    properties deliberately remain the responsibility of the generic
+    custom-data-store scanner.
+    """
+    if (
+        _xml_namespace(root.tag) != _CUSTOM_DOCUMENT_PROPERTIES_NS
+        or _xml_local_name(root.tag) != "Properties"
+    ):
+        _sensitivity_label_issue(
+            issues,
+            f"unexpected-{context}-root",
+            _xml_display_name(root.tag),
+        )
+        return (), True, 0, 0, frozenset()
+
+    entries: list[tuple[str, str]] = []
+    label_ids: set[str] = set()
+    sensitivity_property_count = 0
+    msip_label_property_count = 0
+    relevant = False
+    property_tag = f"{{{_CUSTOM_DOCUMENT_PROPERTIES_NS}}}property"
+    for property_element in root:
+        if property_element.tag != property_tag:
+            continue
+        property_name = property_element.get("name")
+        if property_name == _SENSITIVITY_PROPERTY_NAME:
+            relevant = True
+            sensitivity_property_count += 1
+            value_children = tuple(property_element)
+            label_id: str | None = None
+            if len(value_children) != 1:
+                _sensitivity_label_issue(
+                    issues,
+                    f"invalid-{context}-sensitivity-property-value-count",
+                    _custom_data_store_xml_fragment(
+                        property_element,
+                        omit_root_attribute_names=frozenset({"pid", "name"}),
+                    ),
+                )
+            else:
+                value_element = value_children[0]
+                if (
+                    _xml_namespace(value_element.tag)
+                    != _DOCUMENT_PROPERTY_TYPES_NS
+                    or _xml_local_name(value_element.tag) != "lpwstr"
+                    or len(value_element)
+                ):
+                    _sensitivity_label_issue(
+                        issues,
+                        f"invalid-{context}-sensitivity-property-value-type",
+                        _custom_data_store_xml_fragment(
+                            property_element,
+                            omit_root_attribute_names=frozenset({"pid", "name"}),
+                        ),
+                    )
+                else:
+                    label_id = _canonical_sensitivity_label_guid(value_element.text)
+                    if label_id is None:
+                        _sensitivity_label_issue(
+                            issues,
+                            f"invalid-{context}-sensitivity-label-guid",
+                            _custom_data_store_xml_fragment(
+                                property_element,
+                                omit_root_attribute_names=frozenset({"pid", "name"}),
+                            ),
+                        )
+            if label_id is not None:
+                label_ids.add(label_id)
+                # The standard property holds exactly a label ID. Store only its
+                # canonical private value so GUID casing, braces, and writer PIDs
+                # do not create review noise.
+                entries.append(("sensitivity-property", label_id))
+            continue
+
+        if not isinstance(property_name, str) or not property_name.startswith(
+            "MSIP_Label_"
+        ):
+            continue
+        relevant = True
+        match = _MSIP_LABEL_PROPERTY_PATTERN.fullmatch(property_name)
+        if match is None:
+            _sensitivity_label_issue(
+                issues,
+                f"invalid-{context}-msip-label-property-name",
+                _custom_data_store_xml_fragment(
+                    property_element,
+                    omit_root_attribute_names=frozenset({"pid", "name"}),
+                ),
+            )
+            continue
+        label_id = _canonical_sensitivity_label_guid(match.group(1))
+        if label_id is None:  # pragma: no cover - pattern constrains the GUID
+            _sensitivity_label_issue(
+                issues,
+                f"invalid-{context}-msip-label-guid",
+                _custom_data_store_xml_fragment(
+                    property_element,
+                    omit_root_attribute_names=frozenset({"pid", "name"}),
+                ),
+            )
+            continue
+        msip_label_property_count += 1
+        label_ids.add(label_id)
+        # MIP fields may carry label names, action IDs, sites, or timestamps.
+        # The complete property stays inside this private signature, with writer
+        # PID and raw label-ID spelling removed from its comparison surface.
+        entries.append(
+            (
+                "msip-label-property",
+                repr(
+                    (
+                        label_id,
+                        match.group(2),
+                        _custom_data_store_xml_fragment(
+                            property_element,
+                            omit_root_attribute_names=frozenset({"pid", "name"}),
+                        ),
+                    )
+                ),
+            )
+        )
+
+    if sensitivity_property_count > 1:
+        _sensitivity_label_issue(
+            issues,
+            f"multiple-{context}-sensitivity-properties",
+            sensitivity_property_count,
+        )
+    return (
+        tuple(sorted(entries)),
+        relevant,
+        sensitivity_property_count,
+        msip_label_property_count,
+        frozenset(label_ids),
+    )
+
+
+def _sensitivity_label_metadata(path: Path) -> _SensitivityLabelMetadata:
+    """Inspect persisted Office label metadata without exposing its contents.
+
+    This bounded package scanner recognises only the Office-documented custom
+    property forms and the standard 2020 LabelInfo package relationship. It
+    does not resolve a label, contact a policy service, decrypt a package,
+    infer encryption or access rights, or claim that metadata is effective in
+    any Office client or storage service.
+    """
+    warnings: set[str] = set()
+    issues: list[tuple[str, str]] = []
+    custom_property_entries: list[tuple[str, str]] = []
+    label_information_entries: list[tuple[str, str]] = []
+    relationship_entries: list[tuple[str, str]] = []
+    try:
+        with ZipFile(path) as archive:
+            raw_members = archive.namelist()
+            members = set(raw_members)
+            member_counts = Counter(raw_members)
+            budget = _CustomDataStoreBudget()
+            root_probe_warnings: set[str] = set()
+            root_probe_issues: list[tuple[str, str]] = []
+            root_relationships = _custom_data_store_part_relationships(
+                archive,
+                "",
+                members,
+                root_probe_warnings,
+                budget,
+                root_probe_issues,
+                required=False,
+                context="sensitivity-label-package-root",
+                surface="sensitivity-label",
+            )
+            label_relationships = tuple(
+                relationship
+                for relationship in root_relationships
+                if relationship.relationship_type.casefold()
+                == _SENSITIVITY_LABEL_INFORMATION_RELATIONSHIP.casefold()
+            )
+            has_document_custom_properties = (
+                _CUSTOM_DOCUMENT_PROPERTIES_MEMBER in members
+            )
+            has_conventional_label_information_part = (
+                _SENSITIVITY_LABEL_INFORMATION_MEMBER in members
+            )
+            if not (
+                has_document_custom_properties
+                or label_relationships
+                or has_conventional_label_information_part
+            ):
+                return _SensitivityLabelMetadata(SensitivityLabelSnapshot(), ())
+
+            custom_property_part_count = 0
+            sensitivity_property_count = 0
+            msip_label_property_count = 0
+            label_ids: set[str] = set()
+            custom_property_relevant = False
+            if has_document_custom_properties:
+                if member_counts[_CUSTOM_DOCUMENT_PROPERTIES_MEMBER] > 1:
+                    _sensitivity_label_issue(
+                        issues,
+                        "duplicate-sensitivity-label-custom-properties-member",
+                        member_counts[_CUSTOM_DOCUMENT_PROPERTIES_MEMBER],
+                    )
+                    custom_property_relevant = True
+                root, fallback_signature = _custom_data_store_bounded_root(
+                    archive,
+                    _CUSTOM_DOCUMENT_PROPERTIES_MEMBER,
+                    warnings,
+                    budget,
+                    surface="sensitivity-label",
+                )
+                if root is None:
+                    _sensitivity_label_issue(
+                        issues,
+                        "unreadable-sensitivity-label-custom-properties-part",
+                        fallback_signature,
+                    )
+                    custom_property_relevant = True
+                else:
+                    (
+                        entries,
+                        relevant,
+                        sensitivity_count,
+                        msip_count,
+                        property_label_ids,
+                    ) = _sensitivity_label_custom_property_entries(
+                        root,
+                        issues,
+                        context="custom-properties",
+                    )
+                    custom_property_entries.extend(entries)
+                    custom_property_relevant = custom_property_relevant or relevant
+                    sensitivity_property_count += sensitivity_count
+                    msip_label_property_count += msip_count
+                    label_ids.update(property_label_ids)
+            if custom_property_relevant:
+                custom_property_part_count = 1
+
+            label_information_relationship_count = len(label_relationships)
+            external_label_information_relationship_count = 0
+            actual_label_information_members: set[str] = set()
+            for relationship in label_relationships:
+                relationship_entries.append(
+                    (
+                        "sensitivity-label-information-relationship",
+                        repr(
+                            _custom_data_store_relationship_semantic(
+                                relationship,
+                                target_kind="sensitivity-label-information",
+                            )
+                        ),
+                    )
+                )
+                if relationship.target_mode.casefold() != "internal":
+                    external_label_information_relationship_count += 1
+                    _sensitivity_label_issue(
+                        issues,
+                        "unsafe-sensitivity-label-information-relationship",
+                        _custom_data_store_relationship_semantic(relationship),
+                    )
+                    continue
+                if relationship.target is None:
+                    _sensitivity_label_issue(
+                        issues,
+                        "missing-sensitivity-label-information-target",
+                        _custom_data_store_relationship_semantic(relationship),
+                    )
+                    continue
+                if relationship.target not in members:
+                    _sensitivity_label_issue(
+                        issues,
+                        "missing-sensitivity-label-information-part",
+                        relationship.target,
+                    )
+                    continue
+                actual_label_information_members.add(relationship.target)
+
+            if has_conventional_label_information_part:
+                if member_counts[_SENSITIVITY_LABEL_INFORMATION_MEMBER] > 1:
+                    _sensitivity_label_issue(
+                        issues,
+                        "duplicate-sensitivity-label-information-member",
+                        member_counts[_SENSITIVITY_LABEL_INFORMATION_MEMBER],
+                    )
+                if (
+                    _SENSITIVITY_LABEL_INFORMATION_MEMBER
+                    not in actual_label_information_members
+                ):
+                    _sensitivity_label_issue(
+                        issues,
+                        "unbound-sensitivity-label-information-part",
+                        _SENSITIVITY_LABEL_INFORMATION_MEMBER,
+                    )
+                actual_label_information_members.add(
+                    _SENSITIVITY_LABEL_INFORMATION_MEMBER
+                )
+            if len(actual_label_information_members) > 1:
+                _sensitivity_label_issue(
+                    issues,
+                    "multiple-sensitivity-label-information-parts",
+                    len(actual_label_information_members),
+                )
+
+            label_information_part_count = 0
+            for member in sorted(actual_label_information_members):
+                label_information_part_count += 1
+                root, fallback_signature = _custom_data_store_bounded_root(
+                    archive,
+                    member,
+                    warnings,
+                    budget,
+                    surface="sensitivity-label",
+                )
+                if root is None:
+                    _sensitivity_label_issue(
+                        issues,
+                        "unreadable-sensitivity-label-information-part",
+                        (member, fallback_signature),
+                    )
+                    label_information_entries.append(
+                        (
+                            "unreadable-sensitivity-label-information-part",
+                            fallback_signature or "",
+                        )
+                    )
+                    continue
+                if (
+                    _xml_namespace(root.tag) != _SENSITIVITY_LABEL_INFORMATION_NS
+                    or _xml_local_name(root.tag) != "labelList"
+                ):
+                    _sensitivity_label_issue(
+                        issues,
+                        "unexpected-sensitivity-label-information-root",
+                        _xml_display_name(root.tag),
+                    )
+                label_information_entries.append(
+                    (
+                        "sensitivity-label-information-part",
+                        repr(_custom_data_store_xml_fragment(root)),
+                    )
+                )
+
+            # A root-relationship parse failure matters to this surface only
+            # after the package supplied label-specific evidence. Avoid turning
+            # an unrelated malformed relationship part into a label assertion.
+            if (
+                custom_property_relevant
+                or label_relationships
+                or has_conventional_label_information_part
+            ):
+                warnings.update(root_probe_warnings)
+                issues.extend(root_probe_issues)
+
+            issue_entries = [
+                ("sensitivity-label-issue", repr(issue))
+                for issue in sorted(issues)
+            ]
+            if issues:
+                warnings.add(
+                    "FormulaFence found malformed, unsupported, or incomplete "
+                    "sensitivity-label metadata; affected stored label metadata "
+                    "has a coverage gap."
+                )
+            snapshot = SensitivityLabelSnapshot(
+                custom_property_part_count=custom_property_part_count,
+                sensitivity_property_count=sensitivity_property_count,
+                msip_label_property_count=msip_label_property_count,
+                label_id_count=len(label_ids),
+                label_information_part_count=label_information_part_count,
+                label_information_relationship_count=(
+                    label_information_relationship_count
+                ),
+                external_label_information_relationship_count=(
+                    external_label_information_relationship_count
+                ),
+                unrecognized_sensitivity_label_metadata_count=len(issues),
+                custom_property_signature=(
+                    _private_external_data_signature(
+                        tuple(sorted(custom_property_entries))
+                    )
+                    if custom_property_entries
+                    else None
+                ),
+                label_information_signature=(
+                    _private_external_data_signature(
+                        tuple(sorted(label_information_entries))
+                    )
+                    if label_information_entries
+                    else None
+                ),
+                relationship_signature=(
+                    _private_external_data_signature(
+                        tuple(sorted(relationship_entries))
+                    )
+                    if relationship_entries
+                    else None
+                ),
+                coverage_signature=(
+                    _private_external_data_signature(tuple(sorted(issue_entries)))
+                    if issue_entries
+                    else None
+                ),
+            )
+    except (BadZipFile, OSError, RuntimeError, ValueError) as error:
+        return _SensitivityLabelMetadata(
+            SensitivityLabelSnapshot(
+                unrecognized_sensitivity_label_metadata_count=1,
+                coverage_signature=_private_external_data_signature(
+                    (("sensitivity-label-scan-failure", type(error).__name__),)
+                ),
+            ),
+            (
+                "FormulaFence could not inspect sensitivity-label OOXML "
+                f"({type(error).__name__}); affected stored label metadata was not compared.",
+            ),
+        )
+    if not snapshot.present:
+        return _SensitivityLabelMetadata(SensitivityLabelSnapshot(), tuple(sorted(warnings)))
+    return _SensitivityLabelMetadata(snapshot, tuple(sorted(warnings)))
 
 
 @dataclass(frozen=True)
@@ -52772,6 +53263,7 @@ def _load_snapshot_from_stable_source(
         ),
     )
     custom_data_store_metadata = _custom_data_store_metadata(source)
+    sensitivity_label_metadata = _sensitivity_label_metadata(source)
     legacy_comment_metadata = _legacy_comment_metadata(source)
     threaded_comment_metadata = _threaded_comment_metadata(source)
     worksheet_drawing_shape_metadata = _worksheet_drawing_shape_metadata(source)
@@ -52846,6 +53338,7 @@ def _load_snapshot_from_stable_source(
     parser_warnings.update(digital_signature_metadata.warnings)
     parser_warnings.update(rich_data_metadata.warnings)
     parser_warnings.update(custom_data_store_metadata.warnings)
+    parser_warnings.update(sensitivity_label_metadata.warnings)
     parser_warnings.update(legacy_comment_metadata.warnings)
     parser_warnings.update(threaded_comment_metadata.warnings)
     parser_warnings.update(worksheet_drawing_shape_metadata.warnings)
@@ -54075,6 +54568,7 @@ def _load_snapshot_from_stable_source(
         digital_signatures=digital_signature_metadata.signatures,
         rich_data=rich_data_metadata.rich_data,
         custom_data_stores=custom_data_store_metadata.stores,
+        sensitivity_labels=sensitivity_label_metadata.labels,
         legacy_comments=legacy_comment_metadata.comments,
         threaded_comments=threaded_comment_metadata.comments,
         worksheet_drawing_shapes=worksheet_drawing_shape_metadata.shapes,
@@ -54328,6 +54822,7 @@ def profile_snapshot(
         "digital_signatures": snapshot.digital_signatures.profile_dict(),
         "rich_data": snapshot.rich_data.profile_dict(),
         "custom_data_stores": snapshot.custom_data_stores.profile_dict(),
+        "sensitivity_labels": snapshot.sensitivity_labels.profile_dict(),
         "legacy_comments": snapshot.legacy_comments.profile_dict(),
         "threaded_comments": snapshot.threaded_comments.profile_dict(),
         "worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.profile_dict(),
@@ -54427,6 +54922,7 @@ def profile_snapshot(
             "has_xml_mapping_controls": snapshot.xml_mapping_controls.present,
             "has_rich_data": snapshot.rich_data.present,
             "has_custom_data_stores": snapshot.custom_data_stores.present,
+            "has_sensitivity_label_metadata": snapshot.sensitivity_labels.present,
             "has_legacy_comments": snapshot.legacy_comments.present,
             "has_threaded_comments": snapshot.threaded_comments.present,
             "has_worksheet_drawing_shapes": snapshot.worksheet_drawing_shapes.present,

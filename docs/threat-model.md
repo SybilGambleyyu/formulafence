@@ -1655,26 +1655,29 @@ formula will produce.
 - OPC package signatures and VBA project signatures are distinct stored
   integrity/provenance surfaces. A workbook can preserve ordinary cells and
   even `xl/vbaProject.bin` while the package-root signature origin, XML signature
-  envelope/signed references, optional certificate-part relationship/payload, or
-  classic/Agile/V3 VBA signature payload changes. FormulaFence reads those raw
-  relationships and bounded parts before normal readers can omit them. A
-  material envelope change emits `FF050` and
+  envelope/`SignedInfo` references, OPC `Object` / `Manifest` declaration,
+  optional certificate-part relationship/payload, or classic/Agile/V3 VBA
+  signature payload changes. FormulaFence reads those raw relationships and
+  bounded parts before normal readers can omit them. It structurally inventories
+  package-manifest declarations for direct workbook, worksheet, VBA-project,
+  and external-data connection parts, plus relationship-transform ID and
+  type-group selectors. A material envelope change emits `FF050` and
   `no_digital_signature_changes` blocks it as `FFP050`. Profiles and reports
-  expose aggregate counts only; XML signature material, reference URIs,
-  certificate identities/contents, binary signature payloads, relationship IDs,
-  and targets remain private. Equivalent IDs/order/internal targets and XMLDSIG
-  base64 whitespace normalize away. Missing, duplicate, malformed, unsafe,
-  unbound, unreadable, oversized, or over-budget metadata becomes a coverage
-  warning; reads are bounded to 16 MiB per part, 64 MiB per workbook, and 512
-  parts. Before an XMLDSIG envelope is materialized, FormulaFence streams
-  32,768 elements per part and 65,536 across the signature inventory; a
-  successfully parsed structural overage becomes visible `FF010`/`FF050`
-  coverage evidence. Certificate and VBA-signature binary payloads remain
-  byte-bounded rather than being interpreted as XML. FormulaFence does **not**
-  validate a signature/digest/transform,
-  reference coverage, certificate chain/identity/trust/expiry/revocation,
-  timestamp, signed contents, or VBA code; it does not fetch certificates or
-  contact trust services. Microsoft's [OPC digital-signature
+  expose aggregate counts only; XML signature material, manifest URIs,
+  relationship selectors, certificate identities/contents, binary signature
+  payloads, relationship IDs, and targets remain private. Equivalent
+  IDs/order/internal targets and XMLDSIG base64 whitespace normalize away.
+  Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized, or
+  over-budget metadata becomes a coverage warning; reads are bounded to 16 MiB
+  per part, 64 MiB per workbook, and 512 parts. Before an XMLDSIG envelope is
+  materialized, FormulaFence streams 32,768 elements per part and 65,536 across
+  the signature inventory; a successfully parsed structural overage becomes
+  visible `FF010`/`FF050` coverage evidence. Certificate and VBA-signature
+  binary payloads remain byte-bounded rather than being interpreted as XML.
+  FormulaFence does **not** validate a signature/digest/transform, the
+  cryptographic completeness of manifest coverage, certificate
+  chain/identity/trust/expiry/revocation, timestamp, signed contents, or VBA
+  code; it does not fetch certificates or contact trust services. Microsoft's [OPC digital-signature
   overview](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview)
   assigns signer/trust validation to the package consumer.
 - Traditional Excel Notes are stored in worksheet-associated SpreadsheetML

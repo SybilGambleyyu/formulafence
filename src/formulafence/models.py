@@ -3462,6 +3462,53 @@ class XmlMappingSnapshot:
 
 
 @dataclass(frozen=True)
+class PackageSignatureCoverageSnapshot:
+    """Safe structural inventory of package members named by OPC manifests.
+
+    OPC XML signatures use ``SignedInfo`` to sign signature-local objects. The
+    package material itself is named separately by ``Manifest`` references.
+    This inventory exposes only aggregate coverage classes; part URIs,
+    relationship selectors, content types, and transform declarations remain
+    private. It establishes neither digest/signature validity nor certificate
+    identity or trust.
+    """
+
+    manifest_reference_count: int = 0
+    direct_part_reference_count: int = 0
+    relationship_reference_count: int = 0
+    relationship_group_reference_count: int = 0
+    workbook_part_reference_count: int = 0
+    worksheet_part_reference_count: int = 0
+    vba_project_part_reference_count: int = 0
+    external_data_connection_part_reference_count: int = 0
+    unrecognized_reference_count: int = 0
+    coverage_signature: str | None = field(default=None, repr=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return aggregate manifest coverage without package identities."""
+        return {
+            "manifest_reference_count": self.manifest_reference_count,
+            "direct_part_reference_count": self.direct_part_reference_count,
+            "relationship_reference_count": self.relationship_reference_count,
+            "relationship_group_reference_count": (
+                self.relationship_group_reference_count
+            ),
+            "workbook_part_reference_count": self.workbook_part_reference_count,
+            "worksheet_part_reference_count": self.worksheet_part_reference_count,
+            "vba_project_part_reference_count": (
+                self.vba_project_part_reference_count
+            ),
+            "external_data_connection_part_reference_count": (
+                self.external_data_connection_part_reference_count
+            ),
+            "unrecognized_reference_count": self.unrecognized_reference_count,
+        }
+
+    def profile_dict(self) -> dict[str, Any]:
+        return self.to_dict()
+
+
+@dataclass(frozen=True)
 class DigitalSignatureSnapshot:
     """Safe aggregate of package and VBA digital-signature controls.
 
@@ -3477,6 +3524,9 @@ class DigitalSignatureSnapshot:
     package_signature_certificate_count: int = 0
     package_signature_certificate_part_count: int = 0
     package_signature_certificate_relationship_count: int = 0
+    package_signature_coverage: PackageSignatureCoverageSnapshot = field(
+        default_factory=PackageSignatureCoverageSnapshot
+    )
     vba_project_signature_count: int = 0
     vba_project_signature_relationship_count: int = 0
     unrecognized_digital_signature_count: int = 0
@@ -3514,6 +3564,7 @@ class DigitalSignatureSnapshot:
             "package_signature_certificate_relationship_count": (
                 self.package_signature_certificate_relationship_count
             ),
+            "package_signature_coverage": self.package_signature_coverage.to_dict(),
             "vba_project_signature_count": self.vba_project_signature_count,
             "vba_project_signature_relationship_count": (
                 self.vba_project_signature_relationship_count
@@ -4671,6 +4722,30 @@ class WorkbookSnapshot:
             ),
             "package_signature_certificate_part_count": (
                 self.digital_signatures.package_signature_certificate_part_count
+            ),
+            "package_signature_manifest_reference_count": (
+                self.digital_signatures.package_signature_coverage.manifest_reference_count
+            ),
+            "package_signature_direct_part_reference_count": (
+                self.digital_signatures.package_signature_coverage.direct_part_reference_count
+            ),
+            "package_signature_relationship_reference_count": (
+                self.digital_signatures.package_signature_coverage.relationship_reference_count
+            ),
+            "package_signature_relationship_group_reference_count": (
+                self.digital_signatures.package_signature_coverage.relationship_group_reference_count
+            ),
+            "package_signature_workbook_part_reference_count": (
+                self.digital_signatures.package_signature_coverage.workbook_part_reference_count
+            ),
+            "package_signature_worksheet_part_reference_count": (
+                self.digital_signatures.package_signature_coverage.worksheet_part_reference_count
+            ),
+            "package_signature_vba_project_part_reference_count": (
+                self.digital_signatures.package_signature_coverage.vba_project_part_reference_count
+            ),
+            "package_signature_external_data_connection_part_reference_count": (
+                self.digital_signatures.package_signature_coverage.external_data_connection_part_reference_count
             ),
             "vba_project_signature_count": (
                 self.digital_signatures.vba_project_signature_count

@@ -108,6 +108,7 @@ from formulafence.models import (
     NumberFormatSnapshot,
     OfficeCustomFunctionSnapshot,
     OfficeWebAddinSnapshot,
+    PackageSignatureCoverageSnapshot,
     PivotCacheRefreshSnapshot,
     PivotTableDefinitionSnapshot,
     PowerPivotDataModelSnapshot,
@@ -613,6 +614,10 @@ _CUSTOM_DOCUMENT_PROPERTIES_NS = (
 )
 _MARKUP_COMPATIBILITY_NS = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 _XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
+_OPC_DIGITAL_SIGNATURE_NS = (
+    "http://schemas.openxmlformats.org/package/2006/digital-signature"
+)
+_OPC_RELATIONSHIP_TRANSFORM = f"{_OPC_DIGITAL_SIGNATURE_NS}/RelationshipTransform"
 _RICH_DATA_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata"
 _RICH_DATA_2_NS = "http://schemas.microsoft.com/office/spreadsheetml/2017/richdata2"
 _RICH_DATA_WEB_IMAGE_NS = (
@@ -38422,6 +38427,9 @@ class _DigitalSignatureXmlInspection:
     member: str
     reference_count: int = 0
     certificate_count: int = 0
+    coverage: PackageSignatureCoverageSnapshot = field(
+        default_factory=PackageSignatureCoverageSnapshot
+    )
     signature: str | None = None
     issues: tuple[tuple[str, str], ...] = ()
 
@@ -38796,9 +38804,202 @@ def _digital_signature_fragment(element: ElementTree.Element) -> tuple[object, .
     )
 
 
+def _package_signature_manifest_coverage(
+    root: ElementTree.Element,
+    members: set[str],
+    issues: list[tuple[str, str]],
+) -> PackageSignatureCoverageSnapshot:
+    """Inventory OPC-manifest coverage without validating XMLDSIG material.
+
+    ``SignedInfo`` references signature-local XML objects.  An OPC signature's
+    package-member declarations live in the one package-specific ``Object`` /
+    ``Manifest`` pair instead.  This parser deliberately establishes only the
+    declared structural scope: it neither evaluates digest transforms nor
+    decides whether a certificate or signature is trustworthy.
+    """
+    object_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Object"
+    manifest_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Manifest"
+    reference_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference"
+    transforms_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transforms"
+    transform_tag = f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transform"
+    relationship_reference_tag = (
+        f"{{{_OPC_DIGITAL_SIGNATURE_NS}}}RelationshipReference"
+    )
+    relationship_group_reference_tag = (
+        f"{{{_OPC_DIGITAL_SIGNATURE_NS}}}RelationshipsGroupReference"
+    )
+    coverage_entries: list[tuple[str, str]] = []
+    unrecognized_reference_count = 0
+
+    def issue(context: str, detail: object) -> None:
+        nonlocal unrecognized_reference_count
+        _digital_signature_issue(issues, context, detail)
+        coverage_entries.append((context, repr(detail)))
+        unrecognized_reference_count += 1
+
+    package_objects = [
+        object_element
+        for object_element in root.findall(object_tag)
+        if object_element.findall(manifest_tag)
+    ]
+    if len(package_objects) != 1:
+        issue("invalid-package-signature-object-count", len(package_objects))
+        return PackageSignatureCoverageSnapshot(
+            unrecognized_reference_count=unrecognized_reference_count,
+            coverage_signature=_private_external_data_signature(
+                tuple(sorted(coverage_entries))
+            ),
+        )
+
+    manifests = package_objects[0].findall(manifest_tag)
+    if len(manifests) != 1:
+        issue("invalid-package-signature-manifest-count", len(manifests))
+        return PackageSignatureCoverageSnapshot(
+            unrecognized_reference_count=unrecognized_reference_count,
+            coverage_signature=_private_external_data_signature(
+                tuple(sorted(coverage_entries))
+            ),
+        )
+
+    manifest_references = manifests[0].findall(reference_tag)
+    if not manifest_references:
+        issue("empty-package-signature-manifest", None)
+
+    direct_part_reference_count = 0
+    relationship_reference_count = 0
+    relationship_group_reference_count = 0
+    workbook_part_reference_count = 0
+    worksheet_part_reference_count = 0
+    vba_project_part_reference_count = 0
+    external_data_connection_part_reference_count = 0
+
+    for reference in manifest_references:
+        uri = reference.get("URI")
+        if (
+            uri is None
+            or not uri.startswith("/")
+            or "#" in uri
+            or uri.count("?") != 1
+        ):
+            issue("unsafe-package-signature-manifest-reference-uri", uri)
+            continue
+        raw_part, query = uri.split("?", maxsplit=1)
+        if not query.startswith("ContentType=") or len(query) == len("ContentType="):
+            issue("invalid-package-signature-manifest-content-type-query", uri)
+            continue
+        target = _normalise_part_target("", raw_part)
+        if (
+            target is None
+            or not _is_safe_ooxml_archive_member_name(target)
+            or target not in members
+        ):
+            issue("unknown-package-signature-manifest-target", uri)
+            continue
+
+        transform_elements = reference.findall(transforms_tag)
+        if len(transform_elements) > 1:
+            issue("invalid-package-signature-manifest-transforms-count", uri)
+            continue
+        transforms = (
+            transform_elements[0].findall(transform_tag)
+            if transform_elements
+            else []
+        )
+        relationship_transforms = [
+            transform
+            for transform in transforms
+            if transform.get("Algorithm") == _OPC_RELATIONSHIP_TRANSFORM
+        ]
+        if not relationship_transforms:
+            coverage_entries.append(
+                ("direct-package-signature-manifest-part", repr((target, query)))
+            )
+            direct_part_reference_count += 1
+            normalized_target = target.casefold()
+            if normalized_target == "xl/workbook.xml":
+                workbook_part_reference_count += 1
+            elif (
+                normalized_target.startswith("xl/worksheets/")
+                and normalized_target.endswith(".xml")
+                and "/" not in normalized_target.removeprefix("xl/worksheets/")
+            ):
+                worksheet_part_reference_count += 1
+            elif normalized_target == "xl/vbaproject.bin":
+                vba_project_part_reference_count += 1
+            elif normalized_target == "xl/connections.xml":
+                external_data_connection_part_reference_count += 1
+            continue
+
+        if len(relationship_transforms) != 1:
+            issue("invalid-package-signature-relationship-transform-count", uri)
+            continue
+        if not _is_opc_relationship_member(target):
+            issue("relationship-transform-on-non-relationship-part", uri)
+            continue
+
+        selectors = tuple(relationship_transforms[0])
+        if not selectors:
+            issue("empty-package-signature-relationship-transform", uri)
+            continue
+        valid_selector_count = 0
+        for selector in selectors:
+            if selector.tag == relationship_reference_tag:
+                source_id = selector.get("SourceId")
+                if not source_id:
+                    issue("invalid-package-signature-relationship-reference", uri)
+                    continue
+                coverage_entries.append(
+                    (
+                        "package-signature-relationship-reference",
+                        repr((target, query, source_id)),
+                    )
+                )
+                relationship_reference_count += 1
+                valid_selector_count += 1
+                continue
+            if selector.tag == relationship_group_reference_tag:
+                source_type = selector.get("SourceType")
+                if not source_type:
+                    issue(
+                        "invalid-package-signature-relationship-group-reference",
+                        uri,
+                    )
+                    continue
+                coverage_entries.append(
+                    (
+                        "package-signature-relationship-group-reference",
+                        repr((target, query, source_type)),
+                    )
+                )
+                relationship_group_reference_count += 1
+                valid_selector_count += 1
+                continue
+            issue("unsupported-package-signature-relationship-selector", uri)
+        if not valid_selector_count:
+            issue("unrecognized-package-signature-relationship-transform", uri)
+
+    return PackageSignatureCoverageSnapshot(
+        manifest_reference_count=len(manifest_references),
+        direct_part_reference_count=direct_part_reference_count,
+        relationship_reference_count=relationship_reference_count,
+        relationship_group_reference_count=relationship_group_reference_count,
+        workbook_part_reference_count=workbook_part_reference_count,
+        worksheet_part_reference_count=worksheet_part_reference_count,
+        vba_project_part_reference_count=vba_project_part_reference_count,
+        external_data_connection_part_reference_count=(
+            external_data_connection_part_reference_count
+        ),
+        unrecognized_reference_count=unrecognized_reference_count,
+        coverage_signature=_private_external_data_signature(
+            tuple(sorted(coverage_entries))
+        ),
+    )
+
+
 def _digital_signature_xml_inspection(
     root: ElementTree.Element,
     member: str,
+    members: set[str],
 ) -> _DigitalSignatureXmlInspection:
     """Inspect an XMLDSIG envelope without evaluating its cryptography."""
     issues: list[tuple[str, str]] = []
@@ -38842,10 +39043,12 @@ def _digital_signature_xml_inspection(
     )
     if not references:
         _digital_signature_issue(issues, "empty-package-signature-references", None)
+    coverage = _package_signature_manifest_coverage(root, members, issues)
     return _DigitalSignatureXmlInspection(
         member=member,
         reference_count=len(references),
         certificate_count=len(root.findall(f".//{certificate_tag}")),
+        coverage=coverage,
         signature=_private_external_data_signature(
             (("package-xml-signature", repr(_digital_signature_fragment(root))),)
         ),
@@ -39126,7 +39329,7 @@ def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
                         )
                     )
                     continue
-                inspection = _digital_signature_xml_inspection(root, member)
+                inspection = _digital_signature_xml_inspection(root, member, members)
                 xml_inspections.append(inspection)
                 if inspection.signature is not None:
                     package_entries.append(
@@ -39412,6 +39615,59 @@ def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
         ("digital-signature-issue", repr(issue))
         for issue in issues
     )
+    package_signature_coverage = PackageSignatureCoverageSnapshot(
+        manifest_reference_count=sum(
+            inspection.coverage.manifest_reference_count
+            for inspection in xml_inspections
+        ),
+        direct_part_reference_count=sum(
+            inspection.coverage.direct_part_reference_count
+            for inspection in xml_inspections
+        ),
+        relationship_reference_count=sum(
+            inspection.coverage.relationship_reference_count
+            for inspection in xml_inspections
+        ),
+        relationship_group_reference_count=sum(
+            inspection.coverage.relationship_group_reference_count
+            for inspection in xml_inspections
+        ),
+        workbook_part_reference_count=sum(
+            inspection.coverage.workbook_part_reference_count
+            for inspection in xml_inspections
+        ),
+        worksheet_part_reference_count=sum(
+            inspection.coverage.worksheet_part_reference_count
+            for inspection in xml_inspections
+        ),
+        vba_project_part_reference_count=sum(
+            inspection.coverage.vba_project_part_reference_count
+            for inspection in xml_inspections
+        ),
+        external_data_connection_part_reference_count=sum(
+            inspection.coverage.external_data_connection_part_reference_count
+            for inspection in xml_inspections
+        ),
+        unrecognized_reference_count=sum(
+            inspection.coverage.unrecognized_reference_count
+            for inspection in xml_inspections
+        ),
+        coverage_signature=(
+            _private_external_data_signature(
+                tuple(
+                    sorted(
+                        (
+                            "package-signature-manifest-coverage",
+                            inspection.coverage.coverage_signature or "",
+                        )
+                        for inspection in xml_inspections
+                    )
+                )
+            )
+            if xml_signature_members
+            else None
+        ),
+    )
     snapshot = DigitalSignatureSnapshot(
         package_signature_origin_count=len(origin_members),
         package_xml_signature_count=len(xml_signature_members),
@@ -39425,6 +39681,7 @@ def _digital_signature_metadata(path: Path) -> _DigitalSignatureMetadata:
         package_signature_certificate_relationship_count=(
             package_certificate_relationship_count
         ),
+        package_signature_coverage=package_signature_coverage,
         vba_project_signature_count=len(vba_signature_members),
         vba_project_signature_relationship_count=vba_signature_relationship_count,
         unrecognized_digital_signature_count=len(issues),

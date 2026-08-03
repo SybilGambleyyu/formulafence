@@ -5,6 +5,45 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## OPC package-signature manifest coverage — 2026-08-02
+
+An OPC XML signature uses `SignedInfo` to refer to signature-local XML
+objects; the package material it declares is named separately by the
+package-specific `Object` / `Manifest` structure. The [Open Packaging
+Conventions overview](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview)
+and [ECMA-376 standard](https://ecma-international.org/publications-and-standards/standards/ecma-376/)
+make that distinction important for review: a count of `SignedInfo` references
+does not describe the declared package-part scope.
+
+The 0.222.0 release fixture uses a structurally shaped but deliberately
+cryptographically invalid signature envelope. Its local `SignedInfo` reference
+names a package object; that object's `Manifest` directly declares workbook,
+VBA-project, and external-data connection parts. A separate case adds the OPC
+relationship transform with both an ID selector and a relationship-type-group
+selector. The profile exposes only aggregate counts, while a worksheet
+manifest-retarget produces `FF050` and the safe
+`package_signature_manifest_coverage_changed` detail. The malformed case uses
+an unsafe URI and becomes explicit coverage evidence rather than a guessed
+target.
+
+The release tree passed **1,593 tests** in 111.28 seconds, including direct
+part classification, relationship-transform selectors, a worksheet retarget,
+malformed-manifest fail-closed behavior, redaction across JSON/Markdown/SARIF,
+and existing `FFP050` policy enforcement. Every manifest URI, content-type
+query, selector, digest, certificate, and signature value was checked to stay
+out of public artifacts. FormulaFence inventories declaration structure only:
+it does not verify a digest, signature, transform result, certificate, trust
+chain, or cryptographic completeness of coverage.
+
+The staged source distribution and wheel (wheel SHA-256
+`d512e4648a6b5819a5bf417576d1d273d11b04cef67ab92c579e3bfe3f357c26`) both
+passed `twine check`. A clean Python 3.13 environment installed the wheel and
+reported `FormulaFence 0.222.0`; its profile of the controlled package emitted
+three direct declared parts (one each for workbook, VBA project, and external
+data connection) without raw manifest material. Its worksheet-retarget diff
+reported the safe coverage-detail flag and moved only the aggregate workbook/
+worksheet counts.
+
 ## External-data source-material categories — 2026-08-02
 
 External workbook connections can store provider, server, authentication,

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.222.0 — 2026-08-02
+
+- Add a privacy-safe structural audit of OPC XML-signature package manifests.
+  FormulaFence now distinguishes `SignedInfo`'s signature-local references from
+  the `Object` / `Manifest` declarations that name package material.
+- Profile aggregate direct declared workbook, worksheet, VBA-project, and
+  external-data connection parts, plus relationship-transform ID and type-group
+  selectors. A material change carries the safe
+  `package_signature_manifest_coverage_changed` detail under existing `FF050` /
+  `no_digital_signature_changes` policy enforcement.
+- Fail closed for malformed or unsafe manifest declarations while keeping every
+  manifest URI, content-type query, relationship selector, digest, certificate,
+  and signature value private. This inventories structural declarations only;
+  it does not validate cryptography, transform processing, or certificate trust.
+
 ## 0.221.0 — 2026-08-02
 
 - Make the existing high-severity `FF023` connection-source signal more

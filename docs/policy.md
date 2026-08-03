@@ -167,7 +167,7 @@ case-insensitive; quotes are required when it contains spaces or punctuation.
 | `no_cell_hyperlink_changes` | boolean | A standard or Office 2016 revision worksheet-cell hyperlink binding, location, display override, ScreenTip, or selected relationship target/type/mode changes. Targets, cell references, locations, display strings, ScreenTips, relationship IDs, and revision UIDs are compared privately. |
 | `no_worksheet_sparkline_changes` | boolean | An Office 2010 worksheet sparkline source or date-axis formula, destination cell, group membership, type/axis/display/marker control, line weight, or colour definition changes. Source formulas, destination cells, control values, and colours are compared privately. |
 | `no_xml_mapping_changes` | boolean | An XML Map schema, mapping/refresh behavior, table-column or single-cell binding, or map-related workbook/worksheet relationship changes. Schemas, map names, XPath expressions, table identities, target cells, connection identities, and relationship targets are compared privately. |
-| `no_digital_signature_changes` | boolean | An OPC package signature origin/XML-signature/certificate relationship or payload, XMLDSIG envelope/reference, or VBA project signature payload/relationship changes. Signature XML, reference URIs, certificate identities and contents, binary payloads, relationship IDs, and targets are compared privately; FormulaFence inventories envelopes but does not validate cryptography or trust. |
+| `no_digital_signature_changes` | boolean | An OPC package signature origin/XML-signature/certificate relationship or payload, XMLDSIG envelope/`SignedInfo` reference, package-manifest declared-part or relationship-selector, or VBA project signature payload/relationship changes. Signature XML, manifest URIs/selectors, certificate identities and contents, binary payloads, relationship IDs, and targets are compared privately; FormulaFence inventories declaration structure but does not validate cryptography or trust. |
 | `no_rich_data_changes` | boolean | An Excel rich-value data/structure/type/array/property-bag/style declaration, provider-associated value, web-image/rich-value relationship, or `XLRICHVALUE` metadata/cell binding changes. Entity values, provider data, field names, identifiers, URLs, image references, relationship IDs, and bound-cell locations are compared privately. |
 | `no_custom_data_store_changes` | boolean | Generic Custom XML data/property/schema material or relationships, workbook-bound Custom Data Properties or opaque binary Custom Data payloads, or custom document properties change. Custom XML, schema URIs, property names/values, storage IDs, binary payloads, relationship IDs, and targets are compared privately. Power Query `DataMashup` remains under `no_power_query_changes`. |
 | `no_legacy_comment_changes` | boolean | A legacy Excel Note/comments binding, author association, Note text/rich-text/property declaration, threaded-comment placeholder reconciliation declaration, Note VML visibility/layout, or related relationship changes. Note text, authors, locations, VML, targets, IDs, and GUIDs are compared privately. |
@@ -1658,31 +1658,36 @@ trust surfaces. A workbook can therefore retain identical formulas, values, and
 `xl/vbaProject.bin` bytes while package-signature metadata, a certificate part,
 or a VBA signature payload changes. FormulaFence reads the raw OPC graph:
 package-root origin, origin-to-XML-signature, XML-signature-to-certificate, and
-VBA signature relationships; it privately compares XMLDSIG envelopes/signed
-references, certificate-part payloads, and the conventional classic, Agile, and
-V3 VBA signature binaries.
+VBA signature relationships; it privately compares XMLDSIG envelopes/
+`SignedInfo` references, certificate-part payloads, and the conventional
+classic, Agile, and V3 VBA signature binaries. It also structurally inventories
+the OPC `Object` / `Manifest` declarations that name direct workbook,
+worksheet, VBA-project, and external-data connection parts, along with
+relationship-transform ID and type-group selectors.
 
 Such a change emits `FF050`. Enable `no_digital_signature_changes` to block it
 as `FFP050`. Profiles and finding details expose only aggregate
-origin/XML-signature, signed-reference, embedded-certificate/certificate-part,
-VBA-signature, and malformed-metadata counts. Signature XML, reference URIs,
-certificate identities/contents, binary signature payloads, relationship IDs,
-and targets stay private. Equivalent relationship IDs/order, equivalent
-internal-target spelling, and whitespace in XMLDSIG base64 values normalize
-away. Missing, duplicate, malformed, unsafe, unbound, unreadable, oversized,
-or over-budget metadata produces a coverage warning; reads are bounded to
-16 MiB per part, 64 MiB per workbook, and 512 parts. Before an XMLDSIG envelope
-is materialized, FormulaFence streams 32,768 elements per part and 65,536
-across the signature inventory; a successfully parsed structural overage
-becomes visible `FF010`/`FF050` coverage evidence. Certificate and
+origin/XML-signature, `SignedInfo`-reference, package-manifest/direct-part/
+relationship-selector, embedded-certificate/certificate-part, VBA-signature,
+and malformed-metadata counts. Signature XML, manifest URIs, relationship
+selectors, certificate identities/contents, binary signature payloads,
+relationship IDs, and targets stay private. Equivalent relationship IDs/order,
+equivalent internal-target spelling, and whitespace in XMLDSIG base64 values
+normalize away. Missing, duplicate, malformed, unsafe, unbound, unreadable,
+oversized, or over-budget metadata produces a coverage warning; reads are
+bounded to 16 MiB per part, 64 MiB per workbook, and 512 parts. Before an
+XMLDSIG envelope is materialized, FormulaFence streams 32,768 elements per part
+and 65,536 across the signature inventory; a successfully parsed structural
+overage becomes visible `FF010`/`FF050` coverage evidence. Certificate and
 VBA-signature binary payloads remain byte-bounded rather than being interpreted
 as XML.
 
-This policy guards stored signature envelopes only. It does **not** verify a
-signature or digest, XML transforms or signed-reference coverage, certificate
-chain/identity/trust/expiry/revocation, timestamps, the actual signed
-contents, or VBA code validity. It does not fetch a certificate or contact a
-trust service. Microsoft's [OPC digital-signature
+This policy guards stored signature envelopes and structural declaration scope
+only. It does **not** verify a signature or digest, XML transform processing,
+the cryptographic completeness of manifest coverage, certificate
+chain/identity/trust/expiry/revocation, timestamps, the actual signed contents,
+or VBA code validity. It does not fetch a certificate or contact a trust
+service. Microsoft's [OPC digital-signature
 overview](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview)
 explicitly leaves signer/trust validation to the package consumer; see also
 Excel's [workbook and VBA signing guidance](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/digital-signatures-code-signing).

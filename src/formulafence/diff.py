@@ -3467,6 +3467,11 @@ def _digital_signature_controls_changed(
     ):
         details["package_signature_material_changed"] = True
     if (
+        old_signatures.package_signature_coverage
+        != new_signatures.package_signature_coverage
+    ):
+        details["package_signature_manifest_coverage_changed"] = True
+    if (
         old_signatures.vba_signature_payload_signature
         != new_signatures.vba_signature_payload_signature
     ):

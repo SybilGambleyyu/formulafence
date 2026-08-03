@@ -74,6 +74,10 @@ _SHARED_WORKBOOK_REVISION_LOG_RELATIONSHIP = (
     f"{_DOCUMENT_RELATIONSHIPS_NS}/revisionLog"
 )
 _XML_DIGITAL_SIGNATURE_NS = "http://www.w3.org/2000/09/xmldsig#"
+_OPC_DIGITAL_SIGNATURE_NS = (
+    "http://schemas.openxmlformats.org/package/2006/digital-signature"
+)
+_OPC_RELATIONSHIP_TRANSFORM = f"{_OPC_DIGITAL_SIGNATURE_NS}/RelationshipTransform"
 _DIGITAL_SIGNATURE_ORIGIN_RELATIONSHIP = (
     f"{_PACKAGE_RELATIONSHIPS_NS}/digital-signature/origin"
 )
@@ -2812,7 +2816,7 @@ def make_digital_signature_model(path: Path) -> Path:
         reference = ElementTree.SubElement(
             signed_info,
             f"{{{signature}}}Reference",
-            {"URI": "/xl/workbook.xml"},
+            {"URI": "#idPackageObject"},
         )
         ElementTree.SubElement(
             reference,
@@ -2831,6 +2835,74 @@ def make_digital_signature_model(path: Path) -> Path:
             certificate_data,
             f"{{{signature}}}X509Certificate",
         ).text = "PRIVATE-SIGNER-CERTIFICATE-BASELINE"
+        package_object = ElementTree.SubElement(
+            envelope,
+            f"{{{signature}}}Object",
+            {"Id": "idPackageObject"},
+        )
+        manifest = ElementTree.SubElement(
+            package_object,
+            f"{{{signature}}}Manifest",
+        )
+        manifest_reference = ElementTree.SubElement(
+            manifest,
+            f"{{{signature}}}Reference",
+            {
+                "URI": (
+                    "/xl/workbook.xml?ContentType="
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.sheet.main+xml"
+                )
+            },
+        )
+        ElementTree.SubElement(
+            manifest_reference,
+            f"{{{signature}}}DigestMethod",
+            {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+        )
+        ElementTree.SubElement(
+            manifest_reference,
+            f"{{{signature}}}DigestValue",
+        ).text = "PRIVATE-MANIFEST-DIGEST-BASELINE"
+        vba_manifest_reference = ElementTree.SubElement(
+            manifest,
+            f"{{{signature}}}Reference",
+            {
+                "URI": (
+                    "/xl/vbaProject.bin?ContentType="
+                    "application/vnd.ms-office.vbaProject"
+                )
+            },
+        )
+        ElementTree.SubElement(
+            vba_manifest_reference,
+            f"{{{signature}}}DigestMethod",
+            {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+        )
+        ElementTree.SubElement(
+            vba_manifest_reference,
+            f"{{{signature}}}DigestValue",
+        ).text = "PRIVATE-VBA-MANIFEST-DIGEST-BASELINE"
+        connection_manifest_reference = ElementTree.SubElement(
+            manifest,
+            f"{{{signature}}}Reference",
+            {
+                "URI": (
+                    "/xl/connections.xml?ContentType="
+                    "application/vnd.openxmlformats-officedocument."
+                    "spreadsheetml.connections+xml"
+                )
+            },
+        )
+        ElementTree.SubElement(
+            connection_manifest_reference,
+            f"{{{signature}}}DigestMethod",
+            {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+        )
+        ElementTree.SubElement(
+            connection_manifest_reference,
+            f"{{{signature}}}DigestValue",
+        ).text = "PRIVATE-CONNECTION-MANIFEST-DIGEST-BASELINE"
         contents[signature_member] = serialize(envelope)
         certificate_relationships = ElementTree.Element(
             f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
@@ -2863,6 +2935,11 @@ def make_digital_signature_model(path: Path) -> Path:
         )
         contents["xl/_rels/workbook.xml.rels"] = serialize(workbook_relationships)
         contents["xl/vbaProject.bin"] = b"PRIVATE-VBA-PROJECT-BASELINE"
+        contents["xl/connections.xml"] = (
+            b'<?xml version="1.0" encoding="utf-8"?>'
+            b'<connections xmlns="http://schemas.openxmlformats.org/'
+            b'spreadsheetml/2006/main"/>'
+        )
 
         vba_relationships = ElementTree.Element(
             f"{{{_PACKAGE_RELATIONSHIPS_NS}}}Relationships"
@@ -2913,6 +2990,14 @@ def make_digital_signature_model(path: Path) -> Path:
             "xl/vbaProject.bin",
             "application/vnd.ms-office.vbaProject",
         )
+        add_override(
+            content_types,
+            "xl/connections.xml",
+            (
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.connections+xml"
+            ),
+        )
         for suffix in ("", "Agile", "V3"):
             add_override(
                 content_types,
@@ -2929,12 +3014,20 @@ def change_package_signature_reference(path: Path) -> Path:
     def mutate(contents: dict[str, bytes]) -> None:
         root = _digital_signature_xml_root(contents)
         reference = root.find(
-            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}SignedInfo/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Object/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Manifest/"
             f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference"
         )
         if reference is None:
-            raise ValueError("Fixture package signature does not contain a reference")
-        reference.set("URI", "/xl/worksheets/sheet1.xml")
+            raise ValueError("Fixture package signature does not contain a manifest reference")
+        reference.set(
+            "URI",
+            (
+                "/xl/worksheets/sheet1.xml?ContentType="
+                "application/vnd.openxmlformats-officedocument."
+                "spreadsheetml.worksheet+xml"
+            ),
+        )
         contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
             root,
             encoding="utf-8",
@@ -2942,6 +3035,92 @@ def change_package_signature_reference(path: Path) -> Path:
         )
 
     return _rewrite_archive(path, mutate, ".package-signature-reference.tmp.xlsx")
+
+
+def add_package_signature_relationship_manifest_reference(path: Path) -> Path:
+    """Add one OPC relationship-transform declaration to a signature manifest."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _digital_signature_xml_root(contents)
+        manifest = root.find(
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Object/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Manifest"
+        )
+        if manifest is None:
+            raise ValueError("Fixture package signature does not contain a manifest")
+        reference = ElementTree.SubElement(
+            manifest,
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference",
+            {
+                "URI": (
+                    "/_rels/.rels?ContentType="
+                    "application/vnd.openxmlformats-package.relationships+xml"
+                )
+            },
+        )
+        transforms = ElementTree.SubElement(
+            reference,
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transforms",
+        )
+        relationship_transform = ElementTree.SubElement(
+            transforms,
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transform",
+            {"Algorithm": _OPC_RELATIONSHIP_TRANSFORM},
+        )
+        ElementTree.SubElement(
+            relationship_transform,
+            f"{{{_OPC_DIGITAL_SIGNATURE_NS}}}RelationshipReference",
+            {"SourceId": "rIdFencePackageSignatureOrigin"},
+        )
+        ElementTree.SubElement(
+            relationship_transform,
+            f"{{{_OPC_DIGITAL_SIGNATURE_NS}}}RelationshipsGroupReference",
+            {"SourceType": _DOCUMENT_RELATIONSHIPS_NS + "/officeDocument"},
+        )
+        ElementTree.SubElement(
+            transforms,
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Transform",
+            {"Algorithm": "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"},
+        )
+        ElementTree.SubElement(
+            reference,
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}DigestMethod",
+            {"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"},
+        )
+        ElementTree.SubElement(
+            reference,
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}DigestValue",
+        ).text = "PRIVATE-RELATIONSHIP-MANIFEST-DIGEST"
+        contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-relationship-manifest.tmp.xlsx")
+
+
+def corrupt_package_signature_manifest_reference(path: Path) -> Path:
+    """Make a signature-manifest URI unsafe without following it."""
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _digital_signature_xml_root(contents)
+        reference = root.find(
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Object/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Manifest/"
+            f"{{{_XML_DIGITAL_SIGNATURE_NS}}}Reference"
+        )
+        if reference is None:
+            raise ValueError("Fixture package signature does not contain a manifest reference")
+        reference.set(
+            "URI",
+            "https://private.example.test/PRIVATE-SIGNATURE-MANIFEST-REFERENCE",
+        )
+        contents["_xmlsignatures/sig1.xml"] = ElementTree.tostring(
+            root,
+            encoding="utf-8",
+            xml_declaration=True,
+        )
+
+    return _rewrite_archive(path, mutate, ".package-signature-manifest-corrupt.tmp.xlsx")
 
 
 def change_package_signature_certificate_payload(path: Path) -> Path:

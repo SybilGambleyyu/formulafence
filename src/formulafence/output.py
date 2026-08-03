@@ -4623,6 +4623,9 @@ def profile_to_markdown(
         )
     digital_signatures = profile["digital_signatures"]
     if digital_signatures["present"]:
+        package_signature_coverage = digital_signatures[
+            "package_signature_coverage"
+        ]
         lines.extend(
             [
                 "",
@@ -4634,10 +4637,28 @@ def profile_to_markdown(
                     f"{digital_signatures['package_xml_signature_count']}"
                 ),
                 (
-                    "- **Signed references / embedded certificate values / certificate parts:** "
+                    "- **SignedInfo references / embedded certificate values / "
+                    "certificate parts:** "
                     f"{digital_signatures['package_signature_reference_count']} / "
                     f"{digital_signatures['package_signature_certificate_count']} / "
                     f"{digital_signatures['package_signature_certificate_part_count']}"
+                ),
+                (
+                    "- **Package-manifest references / directly declared parts:** "
+                    f"{package_signature_coverage['manifest_reference_count']} / "
+                    f"{package_signature_coverage['direct_part_reference_count']}"
+                ),
+                (
+                    "- **Relationship selectors (IDs / type groups):** "
+                    f"{package_signature_coverage['relationship_reference_count']} / "
+                    f"{package_signature_coverage['relationship_group_reference_count']}"
+                ),
+                (
+                    "- **Direct workbook / worksheet / VBA / external-data connection parts:** "
+                    f"{package_signature_coverage['workbook_part_reference_count']} / "
+                    f"{package_signature_coverage['worksheet_part_reference_count']} / "
+                    f"{package_signature_coverage['vba_project_part_reference_count']} / "
+                    f"{package_signature_coverage['external_data_connection_part_reference_count']}"
                 ),
                 (
                     "- **Certificate-part relationships:** "
@@ -4655,12 +4676,18 @@ def profile_to_markdown(
                 "- **Unrecognized or malformed digital-signature metadata:** "
                 f"{digital_signatures['unrecognized_digital_signature_count']}"
             )
+        if package_signature_coverage["unrecognized_reference_count"]:
+            lines.append(
+                "- **Unrecognized or malformed package-manifest references:** "
+                f"{package_signature_coverage['unrecognized_reference_count']}"
+            )
         lines.append(
-            "Signature XML, signed-part references, certificate identities and "
-            "contents, VBA signature payloads, and relationship targets are compared "
-            "privately and intentionally omitted. FormulaFence inventories envelope "
-            "changes only: it does not validate cryptography, certificate trust, "
-            "expiration, revocation, timestamps, or signed contents."
+            "Signature XML, manifest URIs, relationship selectors, certificate identities "
+            "and contents, VBA signature payloads, and relationship targets are compared "
+            "privately and intentionally omitted. FormulaFence inventories structural "
+            "declarations and envelope changes only: it does not validate cryptography, "
+            "digest or transform processing, certificate trust, expiration, revocation, "
+            "timestamps, or signed contents."
         )
     rich_data = profile["rich_data"]
     if rich_data["present"]:

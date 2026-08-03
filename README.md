@@ -41,7 +41,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.221.0/formulafence-0.221.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.222.0/formulafence-0.222.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -530,7 +530,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.221.0
+  uses: SybilGambleyyu/formulafence@v0.222.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -2869,15 +2869,20 @@ different while formulas and visible values stay fixed.
 FormulaFence reads the raw OPC package-signature graph before ordinary workbook
 readers can discard or normalize it. It privately compares the package-root
 signature-origin relationship, origin-to-XML-signature relationships, XMLDSIG
-envelopes and signed references, embedded certificate values, certificate-part
-relationships and payloads, and conventional VBA signature payloads and
-relationships (`vbaProjectSignature.bin`, `vbaProjectSignatureAgile.bin`, and
-`vbaProjectSignatureV3.bin`). A material change emits `FF050`; enable
+envelopes and `SignedInfo` references, embedded certificate values,
+certificate-part relationships and payloads, and conventional VBA signature
+payloads and relationships (`vbaProjectSignature.bin`,
+`vbaProjectSignatureAgile.bin`, and `vbaProjectSignatureV3.bin`). It also
+structurally inventories the OPC `Object` / `Manifest` declarations that name
+package material: directly declared workbook, worksheet, VBA-project, and
+external-data connection parts, plus relationship-transform ID and type-group
+selectors. A material change emits `FF050`; enable
 `no_digital_signature_changes` to make that boundary `FFP050` in CI.
 
 Profiles and `FF050` details expose only aggregate origin/XML-signature,
-signed-reference, embedded-certificate/certificate-part, VBA-signature, and
-malformed-metadata counts. Signature XML, reference URIs, certificate
+`SignedInfo`-reference, package-manifest/direct-part/relationship-selector,
+embedded-certificate/certificate-part, VBA-signature, and malformed-metadata
+counts. Signature XML, manifest URIs, relationship selectors, certificate
 identities and contents, binary signature payloads, relationship IDs, and
 relationship targets never enter profiles, Markdown, JSON, or SARIF. Equivalent
 relationship IDs/order and internal-target spelling, plus whitespace in XMLDSIG
@@ -2892,9 +2897,10 @@ payloads remain byte-bounded rather than being interpreted as XML.
 
 This is an envelope-integrity boundary, **not cryptographic validation**.
 FormulaFence does not verify signature or digest values, XML transforms,
-reference coverage, certificate chains, identity, trust, expiry, revocation,
-timestamps, or the validity of signed VBA code. It never fetches certificates
-or contacts a trust service. The scope follows Microsoft's
+the cryptographic completeness of declared reference coverage, certificate
+chains, identity, trust, expiry, revocation, timestamps, or the validity of
+signed VBA code. It inventories declaration structure only; it never fetches
+certificates or contacts a trust service. The scope follows Microsoft's
 [OPC digital-signature overview](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/open-packaging-conventions-overview),
 which places signer/trust validation with the package consumer, and Excel's
 [separate workbook and VBA signing guidance](https://learn.microsoft.com/en-us/troubleshoot/microsoft-365-apps/excel/digital-signatures-code-signing).

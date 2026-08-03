@@ -41,7 +41,7 @@ not a replacement for, source control, model audit, or recalculation in Excel.
 
 ```bash
 # Install the pinned public release directly from GitHub.
-python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.223.0/formulafence-0.223.0-py3-none-any.whl
+python -m pip install https://github.com/SybilGambleyyu/formulafence/releases/download/v0.224.0/formulafence-0.224.0-py3-none-any.whl
 
 # Readable review report
 formulafence diff baseline.xlsx candidate.xlsx --format markdown
@@ -530,7 +530,7 @@ immutable commit in a production workflow.
   with:
     python-version: '3.12'
 - id: formulafence
-  uses: SybilGambleyyu/formulafence@v0.223.0
+  uses: SybilGambleyyu/formulafence@v0.224.0
   with:
     baseline: models/approved/model.xlsx
     candidate: build/model.xlsx
@@ -1303,7 +1303,10 @@ OOXML defaults for sheet actions, so writers that omit or explicitly serialize
 the same defaults do not create a diff. The profile and every report redact
 legacy verifiers, password hashes, salts, protected-range names, and security
 descriptors; FormulaFence retains only private comparison fingerprints plus
-safe presence metadata. Any change emits `FF022`; enable
+safe presence metadata. It recognizes the standard nested
+[`securityDescriptor`](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.spreadsheet.protectedrange?view=openxml-3.0.1)
+form alongside historical attribute-shaped input, but never publishes either
+form's value. Any change emits `FF022`; enable
 `no_protection_changes` for `FFP022`. These controls are not file encryption,
 identity enforcement, or a security guarantee: workbook and worksheet
 protection are an operational review surface, and FormulaFence does not decide

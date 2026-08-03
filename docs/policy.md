@@ -322,9 +322,13 @@ row, column, or large styled range into cell records.
 Profiles and local reports omit legacy password verifiers, modern hash/salt
 values, protected-range names, and security-descriptor contents. Private
 fingerprints still make a changed verifier, range name, security descriptor, or
-unmodelled protection fragment visible as a change. Any protection-control
-change emits `FF022`; enable `no_protection_changes` to make it `FFP022` in CI.
-This is not encryption, authentication, or an access-control decision:
+unmodelled protection fragment visible as a change. FormulaFence recognizes
+standard nested `securityDescriptor` children and historical attribute-shaped
+input through the same private comparison boundary; complex or competing forms
+remain coverage evidence rather than an inferred access decision. Any
+protection-control change emits `FF022`; enable `no_protection_changes` to make
+it `FFP022` in CI. This is not encryption, authentication, or an access-control
+decision:
 workbook/worksheet protection is an operational Excel control, and
 FormulaFence does not determine whether an actor can edit a workbook or fully
 recreate Excel's style-precedence rendering. File encryption and rights

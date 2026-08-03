@@ -12246,6 +12246,34 @@ def change_protected_range(
     return _rewrite_archive(path, mutate, ".protected-range-change.tmp.xlsx")
 
 
+def set_protected_range_security_descriptor_children(
+    path: Path,
+    descriptors: tuple[str, ...],
+) -> Path:
+    """Write standard nested descriptors without exposing their test values."""
+    if not descriptors:
+        raise ValueError("protected-range fixture needs at least one security descriptor")
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
+    def mutate(contents: dict[str, bytes]) -> None:
+        root = _inputs_worksheet_root(contents)
+        protected_range = root.find(
+            f"{{{namespace}}}protectedRanges/{{{namespace}}}protectedRange"
+        )
+        if protected_range is None:
+            raise ValueError("Fixture does not contain a protected range")
+        protected_range.attrib.pop("securityDescriptor", None)
+        descriptor_tag = f"{{{namespace}}}securityDescriptor"
+        for descriptor in list(protected_range):
+            if descriptor.tag == descriptor_tag:
+                protected_range.remove(descriptor)
+        for descriptor in descriptors:
+            ElementTree.SubElement(protected_range, descriptor_tag).text = descriptor
+        _save_inputs_worksheet(contents, root)
+
+    return _rewrite_archive(path, mutate, ".protected-range-descriptor.tmp.xlsx")
+
+
 def reorder_conditional_differential_styles(path: Path) -> Path:
     """Swap ``dxfs`` and their rule ids without changing any visual rule."""
     with ZipFile(path) as archive:

@@ -349,6 +349,8 @@ financial correctness or replace model review.
 - Protection credential material is never emitted: legacy verifiers, modern
   hashes/salts, protected-range names, and security descriptors are compared
   through private fingerprints and reported only as safe presence/change metadata.
+  This includes standard nested descriptor elements and historical
+  attribute-shaped input; unknown namespace lookalikes remain opaque evidence.
 - External-data source material is never emitted: connection names/descriptions,
   paths, URLs, connection strings, commands, parameter values, SSO identifiers,
   cached records, and opaque extension XML remain private comparison evidence.

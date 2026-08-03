@@ -7575,6 +7575,7 @@ def _opaque_protection_metadata(
     *,
     known_attributes: set[str],
     known_children: set[str] = frozenset(),
+    known_child_tags: set[str] = frozenset(),
 ) -> ProtectionOpaqueMetadataSnapshot:
     """Fingerprint unmodelled protection XML without exposing its contents."""
     entries: list[tuple[str, str]] = []
@@ -7582,7 +7583,7 @@ def _opaque_protection_metadata(
         if _xml_local_name(attribute) not in known_attributes:
             entries.append((f"attribute:{_xml_display_name(attribute)}", value))
     for child in element:
-        if _xml_local_name(child.tag) in known_children:
+        if child.tag in known_child_tags or _xml_local_name(child.tag) in known_children:
             continue
         entries.append(
             (
@@ -7801,7 +7802,39 @@ def _protected_range_snapshots(
                 "FormulaFence found a protected range without its required name; "
                 "the affected permission has a coverage gap."
             )
-        security_descriptor = protected_range.get("securityDescriptor")
+        # ISO/IEC 29500 represents standard protected-range security
+        # descriptors as child elements. Some writer variants use an attribute
+        # instead, which FormulaFence has historically accepted. Read both
+        # forms through one private fingerprint so reports never contain a
+        # descriptor or identity while a standards-form change remains visible.
+        security_descriptor_attribute = protected_range.get("securityDescriptor")
+        security_descriptor_tag = f"{{{_SPREADSHEETML_NS}}}securityDescriptor"
+        security_descriptors = protected_range.findall(security_descriptor_tag)
+        security_descriptor_entries: list[tuple[str, str]] = []
+        if security_descriptor_attribute is not None:
+            security_descriptor_entries.append(
+                ("attribute:securityDescriptor", security_descriptor_attribute)
+            )
+        for descriptor in security_descriptors:
+            security_descriptor_entries.append(
+                ("child:securityDescriptor", repr(_xml_fragment(descriptor).sort_key()))
+            )
+        security_descriptor_entries.sort()
+        simple_security_descriptors = bool(security_descriptors) and all(
+            not descriptor.attrib and not list(descriptor) for descriptor in security_descriptors
+        )
+        if security_descriptor_attribute is not None and security_descriptors:
+            warnings.add(
+                "FormulaFence found competing protected-range security descriptor "
+                "encodings; both are compared privately but the affected permission "
+                "has a coverage gap."
+            )
+        if security_descriptors and not simple_security_descriptors:
+            warnings.add(
+                "FormulaFence found a protected-range security descriptor with "
+                "unmodelled markup; its contents are compared privately but the "
+                "affected permission has a coverage gap."
+            )
         credential = _protection_credential_snapshot(
             protected_range,
             legacy_attribute="password",
@@ -7821,11 +7854,9 @@ def _protected_range_snapshots(
                     (("name", name),) if name is not None else ()
                 ),
                 credential=credential,
-                has_security_descriptor=security_descriptor is not None,
+                has_security_descriptor=bool(security_descriptor_entries),
                 security_descriptor_signature=_private_protection_signature(
-                    (("securityDescriptor", security_descriptor),)
-                    if security_descriptor is not None
-                    else ()
+                    tuple(security_descriptor_entries)
                 ),
                 opaque_metadata=_opaque_protection_metadata(
                     protected_range,
@@ -7839,6 +7870,9 @@ def _protected_range_snapshots(
                         "spinCount",
                         "securityDescriptor",
                     },
+                    known_child_tags=(
+                        {security_descriptor_tag} if simple_security_descriptors else set()
+                    ),
                 ),
             )
         )

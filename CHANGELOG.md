@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.224.0 — 2026-08-03
+
+- Recognize ISO/IEC 29500's standard nested protected-range
+  `securityDescriptor` elements, rather than treating them only as opaque XML.
+  Historical attribute-shaped descriptors remain privately comparable too, so a
+  material permission-descriptor change emits the existing redacted `FF022`
+  detail without serializing an identity or descriptor value.
+- Keep the parser boundary fail-closed: complex standard-descriptor markup and
+  competing child/attribute encodings remain explicit coverage gaps, while an
+  extension child that merely shares the `securityDescriptor` local name stays
+  opaque rather than being mistaken for the standard element.
+
 ## 0.223.0 — 2026-08-03
 
 - Tighten the OPC package-signature Manifest selector boundary without adding

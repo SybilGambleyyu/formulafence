@@ -503,6 +503,7 @@ from .helpers import (
     set_external_data_connection_defaults,
     set_package_signature_relationship_manifest_canonicalization,
     set_power_pivot_data_model_equivalent_guids,
+    set_protected_range_security_descriptor_children,
     set_python_in_excel_formula_source,
     set_sheet_protection_defaults,
     set_sheet_protection_modern_verifier,
@@ -2632,6 +2633,77 @@ def test_sheet_protection_defaults_are_canonical_and_verifiers_diff_privately(tm
     assert baseline_hash not in report_text
     assert candidate_hash not in report_text
     assert "c3ludGhldGljLXNhbHQ=" not in report_text
+
+
+def test_standard_protected_range_security_descriptors_diff_privately(tmp_path) -> None:
+    baseline = make_protection_model(tmp_path / "baseline.xlsx")
+    candidate = make_protection_model(tmp_path / "candidate.xlsx")
+    baseline_descriptor = "approved-editor@wcab.invalid"
+    candidate_descriptor = "review-editor@wcab.invalid"
+    set_protected_range_security_descriptor_children(baseline, (baseline_descriptor,))
+    set_protected_range_security_descriptor_children(candidate, (candidate_descriptor,))
+
+    baseline_snapshot = load_snapshot(baseline)
+    profile = profile_snapshot(baseline_snapshot)
+    expected_range = {
+        "sheet": "Inputs",
+        "ranges": ["Inputs!B2:B5"],
+        "has_name": True,
+        "credential": {
+            "configured": True,
+            "has_legacy_verifier": True,
+            "has_modern_verifier": False,
+            "algorithm": None,
+            "spin_count": None,
+        },
+        "has_security_descriptor": True,
+        "opaque_metadata": {"present": False, "count": 0},
+    }
+    assert profile["protected_ranges"] == [expected_range]
+    assert not any("protected-range" in warning for warning in baseline_snapshot.parser_warnings)
+
+    report = compare_snapshots(baseline_snapshot, load_snapshot(candidate))
+    change = next(
+        item for item in report.changes if item.kind == "protected_range_permissions_changed"
+    )
+    assert change.details == {
+        "sheet": "Inputs",
+        "before": [expected_range],
+        "after": [expected_range],
+        "security_descriptor_material_changed": True,
+    }
+    assert {finding.rule_id for finding in report.findings} >= {"FF022"}
+
+    rendered_artifacts = (
+        json.dumps(profile),
+        profile_to_markdown(profile),
+        json.dumps(report.to_dict()),
+        report_to_markdown(report),
+        json.dumps(report_to_sarif(report)),
+    )
+    for descriptor in (baseline_descriptor, candidate_descriptor):
+        assert all(descriptor not in artifact for artifact in rendered_artifacts)
+
+
+def test_protection_opaque_metadata_recognises_exact_descriptor_tags_only() -> None:
+    standard_namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    extension_namespace = "urn:wcab:extension"
+    protected_range = ElementTree.fromstring(
+        f"<protectedRange xmlns=\"{standard_namespace}\" "
+        f"xmlns:extension=\"{extension_namespace}\">"
+        "<securityDescriptor>approved-editor@wcab.invalid</securityDescriptor>"
+        "<extension:securityDescriptor>extension-private-value</extension:securityDescriptor>"
+        "</protectedRange>"
+    )
+
+    opaque_metadata = workbook_module._opaque_protection_metadata(
+        protected_range,
+        known_attributes=set(),
+        known_child_tags={f"{{{standard_namespace}}}securityDescriptor"},
+    )
+
+    assert opaque_metadata.to_dict() == {"present": True, "count": 1}
+    assert "extension-private-value" not in repr(opaque_metadata)
 
 
 def test_protection_control_changes_cover_workbook_ranges_and_cell_assignments(tmp_path) -> None:

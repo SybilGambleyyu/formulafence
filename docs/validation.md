@@ -5,6 +5,36 @@ Those tests are necessary but insufficient for confidence in an Office-file
 reader, so each release should also be exercised on independently maintained
 workbooks without copying their contents into this repository.
 
+## Standard protected-range security descriptors — 2026-08-03
+
+The ISO/IEC protected-range example stores each editable-account descriptor as
+a nested `securityDescriptor` element, while the Office 2010 extension surface
+also documents an attribute-shaped form. FormulaFence 0.224.0 recognizes both
+forms as private comparison material. This makes a standard child-element
+change visible as `protected_range_permissions_changed` / `FF022` without
+turning an account identifier into a profile or report field.
+
+A controlled raw-OOXML pair keeps the protected worksheet, range target,
+range verifier, and every other package member fixed while changing only one
+synthetic nested descriptor. The safe before/after range profile remains equal;
+the report carries only `security_descriptor_material_changed=true`. JSON,
+Markdown, and SARIF are checked for both synthetic values and contain neither.
+A separate namespace-collision regression proves that an extension child with
+the same local name remains opaque evidence. Complex markup or competing
+encodings become explicit coverage warnings rather than a guessed permission
+meaning. This is a stored-document comparison boundary only: it does not prove
+an identity, authenticate an actor, validate a verifier, or claim that Excel
+will enforce the range permission.
+
+The release tree passed **1,598 tests** in 110.24 seconds, `ruff check .`,
+`python -m compileall -q src tests`, and `git diff --check`. The staged wheel
+(SHA-256 `01969ad525a6293f0e88395203c739a3752b2ebb7e888dd669a8ed462fae8479`)
+and source distribution (SHA-256
+`cd5ee1f22a53a1713eb1cfbb364190adb6cbf2af64739d3b00f5fec8375cd5ed`) passed
+`twine check` and installed into fresh Python 3.13 environments as
+`FormulaFence 0.224.0`. The fresh wheel emitted the required redacted `FF022`
+descriptor-change report for the controlled pair.
+
 ## OPC package-signature manifest coverage — 2026-08-02
 
 An OPC XML signature uses `SignedInfo` to refer to signature-local XML
